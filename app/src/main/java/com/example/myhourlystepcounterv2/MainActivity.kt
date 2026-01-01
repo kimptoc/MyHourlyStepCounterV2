@@ -4,91 +4,38 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountBox
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.tooling.preview.PreviewScreenSizes
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.myhourlystepcounterv2.ui.MyHourlyStepCounterV2App
+import com.example.myhourlystepcounterv2.ui.StepCounterViewModel
+import com.example.myhourlystepcounterv2.ui.StepCounterViewModelFactory
 import com.example.myhourlystepcounterv2.ui.theme.MyHourlyStepCounterV2Theme
 
 class MainActivity : ComponentActivity() {
+    private lateinit var viewModel: StepCounterViewModel
+
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        // Permissions are granted, app will work even without them (just won't get steps)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Request permissions if needed
+        if (PermissionHelper.getRequiredPermissions().isNotEmpty()) {
+            requestPermissionLauncher.launch(PermissionHelper.getRequiredPermissions())
+        }
+
         enableEdgeToEdge()
         setContent {
             MyHourlyStepCounterV2Theme {
-                MyHourlyStepCounterV2App()
-            }
-        }
-    }
-}
-
-@PreviewScreenSizes
-@Composable
-fun MyHourlyStepCounterV2App() {
-    var currentDestination by rememberSaveable { mutableStateOf(AppDestinations.HOME) }
-
-    NavigationSuiteScaffold(
-        navigationSuiteItems = {
-            AppDestinations.entries.forEach {
-                item(
-                    icon = {
-                        Icon(
-                            it.icon,
-                            contentDescription = it.label
-                        )
-                    },
-                    label = { Text(it.label) },
-                    selected = it == currentDestination,
-                    onClick = { currentDestination = it }
+                val viewModel: StepCounterViewModel = viewModel(
+                    factory = StepCounterViewModelFactory(this@MainActivity)
                 )
+                MyHourlyStepCounterV2App(viewModel)
             }
         }
-    ) {
-        Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-            Greeting(
-                name = "Android",
-                modifier = Modifier.padding(innerPadding)
-            )
-        }
-    }
-}
-
-enum class AppDestinations(
-    val label: String,
-    val icon: ImageVector,
-) {
-    HOME("Home", Icons.Default.Home),
-    FAVORITES("Favorites", Icons.Default.Favorite),
-    PROFILE("Profile", Icons.Default.AccountBox),
-}
-
-@Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello $name!",
-        modifier = modifier
-    )
-}
-
-@Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-    MyHourlyStepCounterV2Theme {
-        Greeting("Android")
     }
 }

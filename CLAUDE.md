@@ -4,7 +4,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**My Hourly Step Counter V2** is a native Android application built with Kotlin and Jetpack Compose. The app targets modern Android devices (API 33+) with a focus on Material3 design and adaptive UI patterns. The project uses Gradle as the build system with centralized dependency management via a version catalog.
+**My Hourly Step Counter V2** is a native Android application built with Kotlin and Jetpack Compose. 
+The app targets modern Android devices (API 33+) with a focus on Material3 design and adaptive UI patterns. 
+The project uses Gradle as the build system with centralized dependency management via a version catalog.
+
+It should use the step sensor directly to get current step total for the current hour.  To keep a history, it should persist the steps and timestamps. 
+This means it should be able to work after a reboot.
+Basic architecture:
+* WorkManager job runs every hour
+* Reads current step count from TYPE_STEP_COUNTER
+* Calculates delta from last reading
+* Stores hourly record in a local Room database
+* UI reads from the database
+
+On the home tab, it should also show the total steps for the current day, lower down on the screen in smaller font than the hourly count.
+This application should show the date time including minutes and seconds.
+At the start of each hour, it should set the displayed hourly count to zero
+As the hour progress, it should show the number of steps taken in that hour. The display should update every 3 seconds with the latest step total for that hour.
+The Favorites tab should be renamed History and it should show the history of steps taken that day for each hour, for example at midday it would have totals for 11am, 10am , 9am etc listed on the screen.
+
 
 **Key Technologies:**
 - **Language:** Kotlin 2.0.21
