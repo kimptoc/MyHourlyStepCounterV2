@@ -145,16 +145,28 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                     android.util.Log.d("StepCounter", "Hour boundary detected. Saved: $savedHourTimestamp, Current: $currentHourTimestamp")
 
                     val hourStartStepCount = preferences.hourStartStepCount.first()
-                    val currentDeviceSteps = sensorManager.getCurrentTotalSteps()
+                    // CRITICAL: Use stored device total from preferences, not sensor (which may be stale)
+                    val currentDeviceSteps = preferences.totalStepsDevice.first()
 
                     // Calculate steps in the previous hour
-                    val stepsInPreviousHour = currentDeviceSteps - hourStartStepCount
+                    var stepsInPreviousHour = currentDeviceSteps - hourStartStepCount
+
+                    // Validate the delta - reject unreasonable values
+                    val MAX_REASONABLE_STEPS_PER_HOUR = 10000
+                    if (stepsInPreviousHour < 0) {
+                        android.util.Log.w("StepCounter", "WARNING: Negative step delta ($stepsInPreviousHour). Sensor may have reset. Clamping to 0.")
+                        stepsInPreviousHour = 0
+                    } else if (stepsInPreviousHour > MAX_REASONABLE_STEPS_PER_HOUR) {
+                        android.util.Log.w("StepCounter", "WARNING: Unreasonable step delta ($stepsInPreviousHour). Max expected is $MAX_REASONABLE_STEPS_PER_HOUR. Health app sync? Clamping to $MAX_REASONABLE_STEPS_PER_HOUR.")
+                        stepsInPreviousHour = MAX_REASONABLE_STEPS_PER_HOUR
+                    }
 
                     // Save the previous hour's data to database
-                    repository.saveHourlySteps(savedHourTimestamp, maxOf(0, stepsInPreviousHour))
-                    android.util.Log.d("StepCounter", "Saved ${maxOf(0, stepsInPreviousHour)} steps for hour at ${Calendar.getInstance().apply { timeInMillis = savedHourTimestamp }.time}")
+                    repository.saveHourlySteps(savedHourTimestamp, stepsInPreviousHour)
+                    android.util.Log.d("StepCounter", "Saved $stepsInPreviousHour steps for hour at ${Calendar.getInstance().apply { timeInMillis = savedHourTimestamp }.time}")
 
                     // Update preferences for the new hour
+                    // New hour starts at current device step count
                     preferences.saveHourData(
                         hourStartStepCount = currentDeviceSteps,
                         currentTimestamp = currentHourTimestamp,
