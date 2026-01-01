@@ -42,12 +42,9 @@ fun MyHourlyStepCounterV2App(viewModel: StepCounterViewModel) {
         viewModel.initialize(context)
     }
 
-    // Check for hour changes periodically
+    // Schedule hour boundary checks at exact hour transitions
     LaunchedEffect(Unit) {
-        while (true) {
-            viewModel.checkAndResetHour()
-            delay(60000) // Check every minute
-        }
+        viewModel.scheduleHourBoundaryCheck()
     }
 
     NavigationSuiteScaffold(

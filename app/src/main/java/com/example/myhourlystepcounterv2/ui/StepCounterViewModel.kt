@@ -108,20 +108,69 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
         }
     }
 
+    fun scheduleHourBoundaryCheck() {
+        viewModelScope.launch {
+            while (true) {
+                val now = Calendar.getInstance()
+                val nextHour = Calendar.getInstance().apply {
+                    add(Calendar.HOUR_OF_DAY, 1)
+                    set(Calendar.MINUTE, 0)
+                    set(Calendar.SECOND, 1) // Check 1 second after hour starts
+                    set(Calendar.MILLISECOND, 0)
+                }
+                val delayMs = nextHour.timeInMillis - now.timeInMillis
+
+                android.util.Log.d("StepCounter", "Scheduled hour check in ${delayMs}ms (at ${nextHour.time})")
+                delay(delayMs)
+
+                checkAndResetHour()
+            }
+        }
+    }
+
     fun checkAndResetHour() {
         val calendar = Calendar.getInstance()
-        val hourStartTimestamp = calendar.apply {
+        val currentHourTimestamp = calendar.apply {
             set(Calendar.MINUTE, 0)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }.timeInMillis
 
         viewModelScope.launch {
-            val existingRecord = repository.getStepForHour(hourStartTimestamp)
-            if (existingRecord == null) {
-                // New hour detected - the WorkManager will handle saving the previous hour
-                // Just log for debugging
-                android.util.Log.d("StepCounter", "New hour detected at ${calendar.time}")
+            try {
+                val savedHourTimestamp = preferences.currentHourTimestamp.first()
+
+                if (currentHourTimestamp != savedHourTimestamp) {
+                    // Hour has changed! Save the previous hour's data
+                    android.util.Log.d("StepCounter", "Hour boundary detected. Saved: $savedHourTimestamp, Current: $currentHourTimestamp")
+
+                    val hourStartStepCount = preferences.hourStartStepCount.first()
+                    val currentDeviceSteps = sensorManager.getCurrentTotalSteps()
+
+                    // Calculate steps in the previous hour
+                    val stepsInPreviousHour = currentDeviceSteps - hourStartStepCount
+
+                    // Save the previous hour's data to database
+                    repository.saveHourlySteps(savedHourTimestamp, maxOf(0, stepsInPreviousHour))
+                    android.util.Log.d("StepCounter", "Saved ${maxOf(0, stepsInPreviousHour)} steps for hour at ${Calendar.getInstance().apply { timeInMillis = savedHourTimestamp }.time}")
+
+                    // Update preferences for the new hour
+                    preferences.saveHourData(
+                        hourStartStepCount = currentDeviceSteps,
+                        currentTimestamp = currentHourTimestamp,
+                        totalSteps = currentDeviceSteps
+                    )
+
+                    // Reset sensor manager for new hour
+                    sensorManager.resetForNewHour(currentDeviceSteps)
+
+                    // Force update of hourly steps to 0
+                    _hourlySteps.value = 0
+                } else {
+                    android.util.Log.d("StepCounter", "Hour check at ${calendar.time} - still in same hour")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("StepCounter", "Error in checkAndResetHour", e)
             }
         }
     }
