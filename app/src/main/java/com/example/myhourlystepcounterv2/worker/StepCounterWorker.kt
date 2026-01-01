@@ -4,8 +4,11 @@ import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.example.myhourlystepcounterv2.data.StepDatabase
+import com.example.myhourlystepcounterv2.data.StepEntity
+import com.example.myhourlystepcounterv2.data.StepPreferences
 import com.example.myhourlystepcounterv2.data.StepRepository
 import com.example.myhourlystepcounterv2.sensor.StepSensorManager
+import kotlinx.coroutines.flow.first
 import java.util.Calendar
 
 class StepCounterWorker(
@@ -16,40 +19,55 @@ class StepCounterWorker(
         return try {
             val database = StepDatabase.getDatabase(applicationContext)
             val repository = StepRepository(database.stepDao())
+            val preferences = StepPreferences(applicationContext)
 
             val sensorManager = StepSensorManager(applicationContext)
             sensorManager.startListening()
 
-            // Get the current hour's start timestamp
+            // Get the previous hour's timestamp (the hour that just completed)
             val calendar = Calendar.getInstance().apply {
+                add(Calendar.HOUR_OF_DAY, -1)
                 set(Calendar.MINUTE, 0)
                 set(Calendar.SECOND, 0)
                 set(Calendar.MILLISECOND, 0)
             }
-            val hourStartTimestamp = calendar.timeInMillis
+            val previousHourTimestamp = calendar.timeInMillis
+
+            // Get the current hour's timestamp (the hour that's starting now)
+            val currentHourTimestamp = Calendar.getInstance().apply {
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }.timeInMillis
+
+            // Get stored data for the hour that just completed
+            val hourStartStepCount = preferences.hourStartStepCount.first()
+            val deviceTotalSteps = preferences.totalStepsDevice.first()
 
             // Get current step count from sensor
-            val currentSteps = sensorManager.getCurrentTotalSteps()
+            val currentDeviceSteps = sensorManager.getCurrentTotalSteps()
 
-            // Check if we already have a record for this hour
-            val existingRecord = repository.getStepForHour(hourStartTimestamp)
-
-            if (existingRecord == null) {
-                // New hour, get the previous hour's steps
-                val previousHourTimestamp = hourStartTimestamp - (60 * 60 * 1000)
-                val previousRecord = repository.getStepForHour(previousHourTimestamp)
-
-                // Calculate steps in the previous hour
-                val stepsInPreviousHour = if (previousRecord != null) {
-                    currentSteps - previousRecord.stepCount
-                } else {
-                    // First hour, we don't know the delta
-                    0
-                }
-
-                // Save the previous hour's data
-                repository.saveHourlySteps(previousHourTimestamp, stepsInPreviousHour)
+            // Calculate steps during the completed hour
+            val stepsInPreviousHour = if (deviceTotalSteps > 0) {
+                currentDeviceSteps - hourStartStepCount
+            } else {
+                // First run, no previous data
+                0
             }
+
+            // Save the completed hour's data
+            val previousHourRecord = StepEntity(
+                timestamp = previousHourTimestamp,
+                stepCount = maxOf(0, stepsInPreviousHour)
+            )
+            repository.saveHourlySteps(previousHourRecord.timestamp, previousHourRecord.stepCount)
+
+            // Update preferences for the new hour that's starting
+            preferences.saveHourData(
+                hourStartStepCount = currentDeviceSteps,
+                currentTimestamp = currentHourTimestamp,
+                totalSteps = currentDeviceSteps
+            )
 
             sensorManager.stopListening()
             Result.success()

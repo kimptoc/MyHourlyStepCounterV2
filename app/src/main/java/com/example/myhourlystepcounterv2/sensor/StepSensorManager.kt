@@ -44,6 +44,11 @@ class StepSensorManager(context: Context) : SensorEventListener {
         updateStepsForCurrentHour()
     }
 
+    fun setLastKnownStepCount(stepCount: Int) {
+        lastKnownStepCount = stepCount
+        updateStepsForCurrentHour()
+    }
+
     private fun updateStepsForCurrentHour() {
         val stepsThisHour = lastKnownStepCount - lastHourStartStepCount
         _currentStepCount.value = maxOf(0, stepsThisHour)
