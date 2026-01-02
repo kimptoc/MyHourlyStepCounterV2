@@ -30,12 +30,6 @@ class StepCounterWorker(
                 )
             }
 
-            // CRITICAL: Use cached device total from preferences, NOT sensor
-            // Reason: Background sensor access is unreliable/restricted on modern Android.
-            // The foreground ViewModel continuously updates preferences.totalStepsDevice
-            // whenever the sensor fires, so it's always current and reliable.
-            // Worker attempts to register + immediately read sensor = race condition (gets 0/stale)
-
             // Get the previous hour's timestamp (the hour that just completed)
             val calendar = Calendar.getInstance().apply {
                 add(Calendar.HOUR_OF_DAY, -1)
@@ -54,7 +48,46 @@ class StepCounterWorker(
 
             // Get stored data for the hour that just completed
             val hourStartStepCount = preferences.hourStartStepCount.first()
-            val currentDeviceSteps = preferences.totalStepsDevice.first()
+            val preferencesTotalSteps = preferences.totalStepsDevice.first()
+
+            // Try to get current device steps from sensor (in case app was just closed before sensor updated preferences)
+            // This handles edge case: app closes immediately, then hour boundary crosses, preferences still has stale value
+            var currentDeviceSteps = preferencesTotalSteps
+            try {
+                val sensorMgr = applicationContext.getSystemService(android.content.Context.SENSOR_SERVICE)
+                    as android.hardware.SensorManager
+                val stepSensor = sensorMgr.getDefaultSensor(android.hardware.Sensor.TYPE_STEP_COUNTER)
+
+                // Try to read sensor with short timeout
+                if (stepSensor != null && hasPermission) {
+                    val sensorHelper = com.example.myhourlystepcounterv2.sensor.StepSensorManager(applicationContext)
+                    sensorHelper.startListening()
+
+                    // Wait up to 500ms for sensor to fire
+                    for (i in 0 until 5) {
+                        val sensorValue = sensorHelper.getCurrentTotalSteps()
+                        if (sensorValue > 0) {
+                            currentDeviceSteps = sensorValue
+                            android.util.Log.d("StepCounterWorker", "Successfully read sensor value: $sensorValue")
+                            break
+                        }
+                        Thread.sleep(100)
+                    }
+                    sensorHelper.stopListening()
+
+                    // If sensor reading differs from preferences, log the difference
+                    if (currentDeviceSteps != preferencesTotalSteps) {
+                        android.util.Log.w(
+                            "StepCounterWorker",
+                            "Sensor value ($currentDeviceSteps) differs from preferences ($preferencesTotalSteps). " +
+                                    "Using sensor value (app may have been closed before preferences updated)."
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.d("StepCounterWorker", "Could not read sensor, using preferences value: ${e.message}")
+                currentDeviceSteps = preferencesTotalSteps
+            }
 
             android.util.Log.d(
                 "StepCounterWorker",
