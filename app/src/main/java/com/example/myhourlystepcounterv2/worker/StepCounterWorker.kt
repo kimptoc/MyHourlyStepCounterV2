@@ -7,7 +7,6 @@ import com.example.myhourlystepcounterv2.data.StepDatabase
 import com.example.myhourlystepcounterv2.data.StepEntity
 import com.example.myhourlystepcounterv2.data.StepPreferences
 import com.example.myhourlystepcounterv2.data.StepRepository
-import com.example.myhourlystepcounterv2.sensor.StepSensorManager
 import kotlinx.coroutines.flow.first
 import java.util.Calendar
 
@@ -21,8 +20,11 @@ class StepCounterWorker(
             val repository = StepRepository(database.stepDao())
             val preferences = StepPreferences(applicationContext)
 
-            val sensorManager = StepSensorManager(applicationContext)
-            sensorManager.startListening()
+            // CRITICAL: Use cached device total from preferences, NOT sensor
+            // Reason: Background sensor access is unreliable/restricted on modern Android.
+            // The foreground ViewModel continuously updates preferences.totalStepsDevice
+            // whenever the sensor fires, so it's always current and reliable.
+            // Worker attempts to register + immediately read sensor = race condition (gets 0/stale)
 
             // Get the previous hour's timestamp (the hour that just completed)
             val calendar = Calendar.getInstance().apply {
@@ -42,18 +44,54 @@ class StepCounterWorker(
 
             // Get stored data for the hour that just completed
             val hourStartStepCount = preferences.hourStartStepCount.first()
-            val deviceTotalSteps = preferences.totalStepsDevice.first()
+            val currentDeviceSteps = preferences.totalStepsDevice.first()
 
-            // Get current step count from sensor
-            val currentDeviceSteps = sensorManager.getCurrentTotalSteps()
+            android.util.Log.d(
+                "StepCounterWorker",
+                "Hour boundary: hourStart=$hourStartStepCount, current=$currentDeviceSteps"
+            )
 
-            // Calculate steps during the completed hour
-            val stepsInPreviousHour = if (deviceTotalSteps > 0) {
-                currentDeviceSteps - hourStartStepCount
+            // Calculate steps during the completed hour using cached preference value
+            val stepsInPreviousHour = if (currentDeviceSteps > 0 && hourStartStepCount > 0) {
+                val delta = currentDeviceSteps - hourStartStepCount
+
+                // Validate delta
+                val validatedDelta = when {
+                    delta < 0 -> {
+                        android.util.Log.w(
+                            "StepCounterWorker",
+                            "Negative delta ($delta). Sensor may have reset. Using 0."
+                        )
+                        0
+                    }
+                    delta > 10000 -> {
+                        android.util.Log.w(
+                            "StepCounterWorker",
+                            "Unreasonable delta ($delta). Clamping to 10000."
+                        )
+                        10000
+                    }
+                    else -> delta
+                }
+                validatedDelta
+            } else if (hourStartStepCount == 0 && currentDeviceSteps == 0) {
+                // First run or no data yet
+                0
+            } else if (hourStartStepCount > currentDeviceSteps) {
+                // Sensor reset between hours
+                android.util.Log.w(
+                    "StepCounterWorker",
+                    "Sensor reset detected (start=$hourStartStepCount > current=$currentDeviceSteps)"
+                )
+                0
             } else {
-                // First run, no previous data
                 0
             }
+
+            android.util.Log.d(
+                "StepCounterWorker",
+                "Saving $stepsInPreviousHour steps for hour at $previousHourTimestamp"
+            )
 
             // Save the completed hour's data
             val previousHourRecord = StepEntity(
@@ -69,9 +107,14 @@ class StepCounterWorker(
                 totalSteps = currentDeviceSteps
             )
 
-            sensorManager.stopListening()
+            android.util.Log.d(
+                "StepCounterWorker",
+                "New hour initialized: timestamp=$currentHourTimestamp, startSteps=$currentDeviceSteps"
+            )
+
             Result.success()
         } catch (e: Exception) {
+            android.util.Log.e("StepCounterWorker", "Error in doWork", e)
             e.printStackTrace()
             Result.retry()
         }
