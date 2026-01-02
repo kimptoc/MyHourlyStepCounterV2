@@ -18,6 +18,7 @@ class StepSensorManager(context: Context) : SensorEventListener {
 
     private var lastKnownStepCount = 0
     private var lastHourStartStepCount = 0
+    private var isInitialized = false
 
     fun startListening() {
         stepSensor?.let {
@@ -32,8 +33,13 @@ class StepSensorManager(context: Context) : SensorEventListener {
     override fun onSensorChanged(event: SensorEvent?) {
         if (event?.sensor?.type == Sensor.TYPE_STEP_COUNTER) {
             val stepCount = event.values[0].toInt()
+            android.util.Log.d("StepSensor", "Sensor fired: absolute steps = $stepCount, last hour start = $lastHourStartStepCount, isInitialized = $isInitialized, current delta = ${stepCount - lastHourStartStepCount}")
             lastKnownStepCount = stepCount
-            updateStepsForCurrentHour()
+            // Only update display if initialized (prevents showing full device total on first fire)
+            if (isInitialized) {
+                updateStepsForCurrentHour()
+            }
+            android.util.Log.d("StepSensor", "Updated: _currentStepCount = ${_currentStepCount.value}, lastKnownStepCount = $lastKnownStepCount")
         }
     }
 
@@ -46,6 +52,12 @@ class StepSensorManager(context: Context) : SensorEventListener {
 
     fun setLastKnownStepCount(stepCount: Int) {
         lastKnownStepCount = stepCount
+        updateStepsForCurrentHour()
+    }
+
+    fun markInitialized() {
+        isInitialized = true
+        // Recalculate with current values now that we're initialized
         updateStepsForCurrentHour()
     }
 

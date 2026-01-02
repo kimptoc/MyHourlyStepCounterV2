@@ -24,6 +24,8 @@ As the hour progress, it should show the number of steps taken in that hour. The
 The Favorites tab should be renamed History and it should show the history of steps taken that day for each hour, for example at midday it would have totals for 11am, 10am , 9am etc listed on the screen.
 
 
+
+
 **Key Technologies:**
 - **Language:** Kotlin 2.0.21
 - **UI Framework:** Jetpack Compose with Material3

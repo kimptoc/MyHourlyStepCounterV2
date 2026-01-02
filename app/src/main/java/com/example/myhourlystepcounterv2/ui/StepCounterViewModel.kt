@@ -46,10 +46,15 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
         // Initialize sensor manager with current sensor reading
         viewModelScope.launch {
             // Wait for sensor to provide actual reading
-            delay(200) // Give sensor time to fire
-            val actualDeviceSteps = sensorManager.getCurrentTotalSteps()
+            var actualDeviceSteps = 0
+            for (i in 0 until 5) {  // Try up to 5 times with 100ms delays
+                actualDeviceSteps = sensorManager.getCurrentTotalSteps()
+                if (actualDeviceSteps > 0) break
+                delay(100)
+            }
+            android.util.Log.d("StepCounter", "App startup: Read actual device steps = $actualDeviceSteps")
 
-            if (actualDeviceSteps > 0) {
+            if (actualDeviceSteps >= 0) {  // Changed from > 0 to >= 0 to handle initial reading
                 // We have a real sensor reading
                 val savedHourTimestamp = preferences.currentHourTimestamp.first()
                 val currentHourTimestamp = Calendar.getInstance().apply {
@@ -80,6 +85,7 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                 }
 
                 // Initialize for current hour with actual device step count
+                android.util.Log.d("StepCounter", "App startup: Initializing with actual device steps = $actualDeviceSteps, hour = ${Calendar.getInstance().get(Calendar.HOUR_OF_DAY)}")
                 preferences.saveHourData(
                     hourStartStepCount = actualDeviceSteps,
                     currentTimestamp = currentHourTimestamp,
@@ -87,7 +93,8 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                 )
                 sensorManager.setLastHourStartStepCount(actualDeviceSteps)
                 sensorManager.setLastKnownStepCount(actualDeviceSteps)
-                android.util.Log.d("StepCounter", "App startup: Current device steps = $actualDeviceSteps")
+                sensorManager.markInitialized()
+                android.util.Log.d("StepCounter", "App startup: Set sensor manager - hour start = $actualDeviceSteps, known total = $actualDeviceSteps")
             }
         }
 
@@ -108,7 +115,9 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                 sensorManager.currentStepCount
             ) { dbTotal, currentHourSteps ->
                 // Add current hour's steps to the database total
-                (dbTotal ?: 0) + currentHourSteps
+                val finalTotal = (dbTotal ?: 0) + currentHourSteps
+                android.util.Log.d("StepCounter", "Daily total calculated: dbTotal=$dbTotal, currentHourSteps=$currentHourSteps, final=$finalTotal")
+                finalTotal
             }.collect { total ->
                 _dailySteps.value = total
             }
@@ -117,6 +126,7 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
         // Observe day history
         viewModelScope.launch {
             repository.getStepsForDay(startOfDay).collect { steps ->
+                android.util.Log.d("StepCounter", "History loaded: ${steps.size} entries - ${steps.map { "${it.timestamp}: ${it.stepCount}" }.joinToString(", ")}")
                 _dayHistory.value = steps
             }
         }
