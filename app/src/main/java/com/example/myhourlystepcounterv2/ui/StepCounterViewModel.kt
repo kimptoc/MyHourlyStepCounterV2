@@ -108,12 +108,12 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                     set(Calendar.MILLISECOND, 0)
                 }.timeInMillis
 
+                val previousHourStartSteps = preferences.hourStartStepCount.first()
+                val savedDeviceTotal = preferences.totalStepsDevice.first()
+
                 // Check if we're in a new hour since last session
                 if (currentHourTimestamp != savedHourTimestamp && savedHourTimestamp > 0) {
                     // Hour changed while app was closed - save previous hour data
-                    val previousHourStartSteps = preferences.hourStartStepCount.first()
-                    val savedDeviceTotal = preferences.totalStepsDevice.first()
-
                     if (previousHourStartSteps > 0 && savedDeviceTotal > 0) {
                         var stepsInPreviousHour = actualDeviceSteps - previousHourStartSteps
 
@@ -127,19 +127,42 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                         repository.saveHourlySteps(savedHourTimestamp, stepsInPreviousHour)
                         android.util.Log.d("StepCounter", "App startup: Saved $stepsInPreviousHour steps for previous hour")
                     }
-                }
 
-                // Initialize for current hour with actual device step count
-                android.util.Log.d("StepCounter", "App startup: Initializing with actual device steps = $actualDeviceSteps, hour = ${Calendar.getInstance().get(Calendar.HOUR_OF_DAY)}")
-                preferences.saveHourData(
-                    hourStartStepCount = actualDeviceSteps,
-                    currentTimestamp = currentHourTimestamp,
-                    totalSteps = actualDeviceSteps
-                )
-                sensorManager.setLastHourStartStepCount(actualDeviceSteps)
-                sensorManager.setLastKnownStepCount(actualDeviceSteps)
-                sensorManager.markInitialized()
-                android.util.Log.d("StepCounter", "App startup: Set sensor manager - hour start = $actualDeviceSteps, known total = $actualDeviceSteps")
+                    // Initialize for current hour with actual device step count
+                    android.util.Log.d("StepCounter", "App startup: Initializing with actual device steps = $actualDeviceSteps, hour = ${Calendar.getInstance().get(Calendar.HOUR_OF_DAY)}")
+                    preferences.saveHourData(
+                        hourStartStepCount = actualDeviceSteps,
+                        currentTimestamp = currentHourTimestamp,
+                        totalSteps = actualDeviceSteps
+                    )
+                    sensorManager.setLastHourStartStepCount(actualDeviceSteps)
+                    sensorManager.setLastKnownStepCount(actualDeviceSteps)
+                    sensorManager.markInitialized()
+                    android.util.Log.d("StepCounter", "App startup: Set sensor manager - hour start = $actualDeviceSteps, known total = $actualDeviceSteps")
+                } else {
+                    // Same hour as last session
+                    val stepsWhileAppWasClosed = actualDeviceSteps - savedDeviceTotal
+
+                    if (stepsWhileAppWasClosed > 10 && previousHourStartSteps > 0) {
+                        // App was closed in the same hour and steps were taken
+                        // Restore previous baseline to preserve what steps we CAN track
+                        android.util.Log.w(
+                            "StepCounter",
+                            "APP CLOSED MID-HOUR: Detected $stepsWhileAppWasClosed steps taken while app closed. " +
+                                    "Restoring previous hour baseline ($previousHourStartSteps) to track current hour properly. " +
+                                    "Steps taken while closed are untrackable (sensor not monitored)."
+                        )
+                        sensorManager.setLastHourStartStepCount(previousHourStartSteps)
+                        sensorManager.setLastKnownStepCount(actualDeviceSteps)
+                        sensorManager.markInitialized()
+                    } else {
+                        // Normal case: app was just backgrounded/resumed in same hour
+                        android.util.Log.d("StepCounter", "App startup: Restoring same-hour state")
+                        sensorManager.setLastHourStartStepCount(previousHourStartSteps)
+                        sensorManager.setLastKnownStepCount(actualDeviceSteps)
+                        sensorManager.markInitialized()
+                    }
+                }
             }
         }
 
