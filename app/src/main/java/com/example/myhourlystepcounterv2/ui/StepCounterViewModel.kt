@@ -150,8 +150,19 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                 delay(1000) // Update every second
             }
         }
+
+        // Schedule hour boundary checks - MUST be called after initialize() completes
+        // to ensure sensorManager and preferences are initialized
+        scheduleHourBoundaryCheck()
     }
 
+    /**
+     * Schedule hour boundary checks to run at exact hour transitions (XX:00:01).
+     *
+     * IMPORTANT: Must be called AFTER initialize() completes to ensure sensorManager
+     * and preferences are initialized. Calling this before initialization could cause
+     * lateinit exceptions. This is called automatically from initialize().
+     */
     fun scheduleHourBoundaryCheck() {
         viewModelScope.launch {
             while (true) {

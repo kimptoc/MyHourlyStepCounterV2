@@ -20,7 +20,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.PreviewScreenSizes
-import kotlinx.coroutines.delay
 
 enum class AppDestinations(
     val label: String,
@@ -39,13 +38,9 @@ fun MyHourlyStepCounterV2App(viewModel: StepCounterViewModel) {
 
     // Initialize ViewModel with application context (not Activity context)
     // to avoid context leaks in long-lived objects (DB, preferences, sensor manager, WorkManager)
+    // NOTE: initialize() also calls scheduleHourBoundaryCheck() internally to ensure proper ordering
     LaunchedEffect(Unit) {
         viewModel.initialize(context.applicationContext)
-    }
-
-    // Schedule hour boundary checks at exact hour transitions
-    LaunchedEffect(Unit) {
-        viewModel.scheduleHourBoundaryCheck()
     }
 
     NavigationSuiteScaffold(
