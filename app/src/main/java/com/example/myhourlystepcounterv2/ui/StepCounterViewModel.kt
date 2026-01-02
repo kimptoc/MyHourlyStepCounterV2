@@ -3,6 +3,7 @@ package com.example.myhourlystepcounterv2.ui
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.myhourlystepcounterv2.PermissionHelper
 import com.example.myhourlystepcounterv2.data.StepDatabase
 import com.example.myhourlystepcounterv2.data.StepEntity
 import com.example.myhourlystepcounterv2.data.StepPreferences
@@ -43,7 +44,13 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
         sensorManager = StepSensorManager(context)
         preferences = StepPreferences(context)
 
-        sensorManager.startListening()
+        // Check permission before registering sensor listener
+        if (PermissionHelper.hasActivityRecognitionPermission(context)) {
+            sensorManager.startListening()
+            android.util.Log.d("StepCounter", "Sensor listener started - ACTIVITY_RECOGNITION permission granted")
+        } else {
+            android.util.Log.w("StepCounter", "Sensor listener NOT started - ACTIVITY_RECOGNITION permission denied")
+        }
 
         // Schedule the hourly work
         WorkManagerScheduler.scheduleHourlyStepCounter(context)

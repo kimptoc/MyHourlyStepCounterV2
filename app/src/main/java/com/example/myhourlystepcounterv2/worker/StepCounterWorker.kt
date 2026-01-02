@@ -3,6 +3,7 @@ package com.example.myhourlystepcounterv2.worker
 import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.example.myhourlystepcounterv2.PermissionHelper
 import com.example.myhourlystepcounterv2.data.StepDatabase
 import com.example.myhourlystepcounterv2.data.StepEntity
 import com.example.myhourlystepcounterv2.data.StepPreferences
@@ -19,6 +20,15 @@ class StepCounterWorker(
             val database = StepDatabase.getDatabase(applicationContext)
             val repository = StepRepository(database.stepDao())
             val preferences = StepPreferences(applicationContext)
+
+            // Check permission status for logging
+            val hasPermission = PermissionHelper.hasActivityRecognitionPermission(applicationContext)
+            if (!hasPermission) {
+                android.util.Log.w(
+                    "StepCounterWorker",
+                    "ACTIVITY_RECOGNITION permission not granted - sensor data may not be available"
+                )
+            }
 
             // CRITICAL: Use cached device total from preferences, NOT sensor
             // Reason: Background sensor access is unreliable/restricted on modern Android.
