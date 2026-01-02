@@ -32,7 +32,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MyHourlyStepCounterV2Theme {
                 val viewModel: StepCounterViewModel = viewModel(
-                    factory = StepCounterViewModelFactory(this@MainActivity)
+                    factory = StepCounterViewModelFactory(applicationContext)
                 )
                 MyHourlyStepCounterV2App(viewModel)
             }

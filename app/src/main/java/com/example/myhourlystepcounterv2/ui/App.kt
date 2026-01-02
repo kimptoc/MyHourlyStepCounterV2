@@ -37,9 +37,10 @@ fun MyHourlyStepCounterV2App(viewModel: StepCounterViewModel) {
     var currentDestination by rememberSaveable { mutableStateOf(AppDestinations.HOME) }
     val context = LocalContext.current
 
-    // Initialize ViewModel
+    // Initialize ViewModel with application context (not Activity context)
+    // to avoid context leaks in long-lived objects (DB, preferences, sensor manager, WorkManager)
     LaunchedEffect(Unit) {
-        viewModel.initialize(context)
+        viewModel.initialize(context.applicationContext)
     }
 
     // Schedule hour boundary checks at exact hour transitions

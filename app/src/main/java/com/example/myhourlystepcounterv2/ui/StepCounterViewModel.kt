@@ -34,6 +34,11 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
     private val _currentTime = MutableStateFlow(System.currentTimeMillis())
     val currentTime: StateFlow<Long> = _currentTime.asStateFlow()
 
+    /**
+     * Initialize the view model with context-dependent components.
+     * IMPORTANT: Must be called with context.applicationContext (not Activity context)
+     * to avoid context leaks in long-lived objects (sensor manager, preferences, WorkManager).
+     */
     fun initialize(context: Context) {
         sensorManager = StepSensorManager(context)
         preferences = StepPreferences(context)
