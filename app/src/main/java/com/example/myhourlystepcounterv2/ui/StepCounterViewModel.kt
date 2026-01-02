@@ -57,14 +57,47 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
 
         // Initialize sensor manager with current sensor reading
         viewModelScope.launch {
-            // Wait for sensor to provide actual reading
+            // Wait for sensor to provide actual reading with extended timeout
+            // Some devices may take longer than 500ms for the sensor to fire
             var actualDeviceSteps = 0
-            for (i in 0 until 5) {  // Try up to 5 times with 100ms delays
+            val maxRetries = 10  // 10 retries × 100ms = ~1 second timeout
+            var sensorReadObtained = false
+
+            for (i in 0 until maxRetries) {
                 actualDeviceSteps = sensorManager.getCurrentTotalSteps()
-                if (actualDeviceSteps > 0) break
-                delay(100)
+                if (actualDeviceSteps > 0) {
+                    sensorReadObtained = true
+                    android.util.Log.d(
+                        "StepCounter",
+                        "App startup: Sensor responded on retry $i with $actualDeviceSteps steps"
+                    )
+                    break
+                }
+                if (i < maxRetries - 1) {
+                    delay(100)
+                }
             }
-            android.util.Log.d("StepCounter", "App startup: Read actual device steps = $actualDeviceSteps")
+
+            // If sensor didn't respond in time, fall back to last known value from preferences
+            if (!sensorReadObtained || actualDeviceSteps == 0) {
+                val fallbackValue = preferences.totalStepsDevice.first()
+                if (fallbackValue > 0) {
+                    actualDeviceSteps = fallbackValue
+                    android.util.Log.w(
+                        "StepCounter",
+                        "App startup: Sensor didn't respond within ${maxRetries * 100}ms. " +
+                                "Using fallback value from preferences: $fallbackValue"
+                    )
+                } else {
+                    android.util.Log.w(
+                        "StepCounter",
+                        "App startup: Sensor unresponsive and no fallback value available. " +
+                                "Starting fresh with 0. This is normal for first launch."
+                    )
+                }
+            }
+
+            android.util.Log.d("StepCounter", "App startup: Using device steps = $actualDeviceSteps")
 
             if (actualDeviceSteps >= 0) {  // Changed from > 0 to >= 0 to handle initial reading
                 // We have a real sensor reading
