@@ -35,11 +35,13 @@ class StepSensorManager(context: Context) : SensorEventListener {
         if (event?.sensor?.type == Sensor.TYPE_STEP_COUNTER) {
             val stepCount = event.values[0].toInt()
 
-            // Detect sensor resets (e.g., when another app like Samsung Health accesses sensor)
-            if (previousSensorValue > 0 && stepCount < previousSensorValue) {
+            // Detect significant sensor resets (e.g., when another app like Samsung Health accesses sensor)
+            // Only ignore if drop is significant (more than 10 steps), not just minor fluctuations
+            val delta = stepCount - previousSensorValue
+            if (previousSensorValue > 0 && delta < -10) {  // Significant drop
                 android.util.Log.w(
                     "StepSensor",
-                    "SENSOR RESET DETECTED: previous=$previousSensorValue, current=$stepCount. " +
+                    "SENSOR RESET DETECTED: previous=$previousSensorValue, current=$stepCount, delta=$delta. " +
                             "Another app may have accessed the sensor (e.g., Samsung Health). " +
                             "Keeping previous value to maintain data integrity."
                 )

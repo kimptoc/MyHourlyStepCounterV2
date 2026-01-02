@@ -279,6 +279,32 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
         sensorManager.setLastHourStartStepCount(stepCount)
     }
 
+    /**
+     * Refresh step counts when app resumes (e.g., from another fitness app like Samsung Health).
+     * This ensures the sensor is responsive and displays are up-to-date.
+     */
+    fun refreshStepCounts() {
+        viewModelScope.launch {
+            // Force recalculation based on current sensor state
+            val currentTotal = sensorManager.getCurrentTotalSteps()
+
+            if (currentTotal >= 0) {
+                android.util.Log.d(
+                    "StepCounter",
+                    "refreshStepCounts: Current device steps = $currentTotal. " +
+                            "Forcing sensor manager to recalculate hourly delta."
+                )
+
+                // Force the sensor manager to recalculate with current known values
+                sensorManager.setLastKnownStepCount(currentTotal)
+
+                android.util.Log.d("StepCounter", "refreshStepCounts: Display refreshed")
+            } else {
+                android.util.Log.w("StepCounter", "refreshStepCounts: Could not read sensor")
+            }
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         sensorManager.stopListening()

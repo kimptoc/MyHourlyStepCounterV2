@@ -34,8 +34,19 @@ class MainActivity : ComponentActivity() {
                 val viewModel: StepCounterViewModel = viewModel(
                     factory = StepCounterViewModelFactory(applicationContext)
                 )
+                this@MainActivity.viewModel = viewModel
                 MyHourlyStepCounterV2App(viewModel)
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Refresh step counts when app comes back to foreground (e.g., from Samsung Health)
+        // This ensures sensor is re-registered and step data is accurate
+        if (this::viewModel.isInitialized) {
+            viewModel.refreshStepCounts()
+            android.util.Log.d("MainActivity", "onResume: Refreshed step counts after returning from another app")
         }
     }
 }
