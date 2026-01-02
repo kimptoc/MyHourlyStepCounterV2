@@ -19,6 +19,7 @@ class StepSensorManager(context: Context) : SensorEventListener {
     private var lastKnownStepCount = 0
     private var lastHourStartStepCount = 0
     private var isInitialized = false
+    private var previousSensorValue = 0  // Track previous value to detect resets
 
     fun startListening() {
         stepSensor?.let {
@@ -33,7 +34,23 @@ class StepSensorManager(context: Context) : SensorEventListener {
     override fun onSensorChanged(event: SensorEvent?) {
         if (event?.sensor?.type == Sensor.TYPE_STEP_COUNTER) {
             val stepCount = event.values[0].toInt()
+
+            // Detect sensor resets (e.g., when another app like Samsung Health accesses sensor)
+            if (previousSensorValue > 0 && stepCount < previousSensorValue) {
+                android.util.Log.w(
+                    "StepSensor",
+                    "SENSOR RESET DETECTED: previous=$previousSensorValue, current=$stepCount. " +
+                            "Another app may have accessed the sensor (e.g., Samsung Health). " +
+                            "Keeping previous value to maintain data integrity."
+                )
+                // Don't update lastKnownStepCount - keep the previous value
+                // This prevents the display from dropping to zero
+                previousSensorValue = stepCount  // Track the reset for next detection
+                return
+            }
+
             android.util.Log.d("StepSensor", "Sensor fired: absolute steps = $stepCount, last hour start = $lastHourStartStepCount, isInitialized = $isInitialized, current delta = ${stepCount - lastHourStartStepCount}")
+            previousSensorValue = stepCount  // Track for reset detection
             lastKnownStepCount = stepCount
             // Only update display if initialized (prevents showing full device total on first fire)
             if (isInitialized) {
@@ -52,6 +69,7 @@ class StepSensorManager(context: Context) : SensorEventListener {
 
     fun setLastKnownStepCount(stepCount: Int) {
         lastKnownStepCount = stepCount
+        previousSensorValue = stepCount  // Update tracking for reset detection
         updateStepsForCurrentHour()
     }
 
@@ -68,6 +86,7 @@ class StepSensorManager(context: Context) : SensorEventListener {
 
     fun resetForNewHour(currentStepCount: Int) {
         lastHourStartStepCount = currentStepCount
+        previousSensorValue = currentStepCount  // Update tracking for reset detection
         _currentStepCount.value = 0
     }
 
