@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.myhourlystepcounterv2.PermissionHelper
+import com.example.myhourlystepcounterv2.StepTrackerConfig
 import com.example.myhourlystepcounterv2.data.StepDatabase
 import com.example.myhourlystepcounterv2.data.StepEntity
 import com.example.myhourlystepcounterv2.data.StepPreferences
@@ -113,6 +114,79 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                 val previousHourStartSteps = preferences.hourStartStepCount.first()
                 val savedDeviceTotal = preferences.totalStepsDevice.first()
 
+                // Check for day boundary crossing and handle closure periods
+                val currentStartOfDay = getStartOfDay()
+                val lastOpenDate = preferences.lastOpenDate.first()
+                val crossedDayBoundary = lastOpenDate > 0 && lastOpenDate < currentStartOfDay
+                val isFirstOpenOfDay = lastOpenDate != currentStartOfDay
+
+                if (crossedDayBoundary) {
+                    // Day boundary crossed - handle yesterday's incomplete hour
+                    android.util.Log.w(
+                        "StepCounter",
+                        "DAY BOUNDARY CROSSED at startup: lastOpenDate=${java.util.Date(lastOpenDate)}, " +
+                                "today=${java.util.Date(currentStartOfDay)}"
+                    )
+
+                    // Save yesterday's incomplete hour as 0 (assume sleep period)
+                    if (savedHourTimestamp > 0) {
+                        repository.saveHourlySteps(savedHourTimestamp, 0)
+                        android.util.Log.d("StepCounter", "Day boundary: Saved 0 steps for yesterday's incomplete hour")
+                    }
+                }
+
+                if (isFirstOpenOfDay) {
+                    // First open of this day - handle closure period with smart distribution
+                    val stepsWhileClosed = actualDeviceSteps - savedDeviceTotal
+                    val currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+                    val isEarlyMorning = currentHour < StepTrackerConfig.MORNING_THRESHOLD_HOUR
+
+                    if (stepsWhileClosed > 10 && savedHourTimestamp > 0 && savedHourTimestamp < currentStartOfDay) {
+                        // App was closed across a day boundary with significant steps
+                        android.util.Log.i(
+                            "StepCounter",
+                            "FIRST OPEN OF DAY: stepsWhileClosed=$stepsWhileClosed, hour=$currentHour, " +
+                                    "earlyMorning=$isEarlyMorning, threshold=${StepTrackerConfig.MORNING_THRESHOLD_HOUR}"
+                        )
+
+                        if (isEarlyMorning) {
+                            // Early morning (before 10am): put all steps in current hour
+                            android.util.Log.i("StepCounter", "Early morning: putting all $stepsWhileClosed steps in current hour")
+                            // Current hour baseline will be set below to show the steps
+                        } else {
+                            // Later in day: distribute steps evenly across waking hours (threshold onwards)
+                            val hoursAwake = currentHour - StepTrackerConfig.MORNING_THRESHOLD_HOUR
+                            if (hoursAwake > 0) {
+                                val stepsPerHour = stepsWhileClosed / hoursAwake
+                                android.util.Log.i(
+                                    "StepCounter",
+                                    "Later in day: distributing $stepsWhileClosed steps across $hoursAwake hours (~$stepsPerHour/hour)"
+                                )
+
+                                // Save distributed steps for hours from threshold to now
+                                val thresholdCalendar = Calendar.getInstance().apply {
+                                    set(Calendar.HOUR_OF_DAY, StepTrackerConfig.MORNING_THRESHOLD_HOUR)
+                                    set(Calendar.MINUTE, 0)
+                                    set(Calendar.SECOND, 0)
+                                    set(Calendar.MILLISECOND, 0)
+                                }
+
+                                for (hour in 0 until hoursAwake) {
+                                    val hourTimestamp = thresholdCalendar.apply {
+                                        add(Calendar.HOUR_OF_DAY, 1)
+                                    }.timeInMillis
+
+                                    val stepsClamped = minOf(stepsPerHour, StepTrackerConfig.MAX_STEPS_PER_HOUR)
+                                    repository.saveHourlySteps(hourTimestamp, stepsClamped)
+                                }
+                            }
+                        }
+                    }
+
+                    // Update last open date
+                    preferences.saveLastOpenDate(currentStartOfDay)
+                }
+
                 // Check if we're in a new hour since last session
                 if (currentHourTimestamp != savedHourTimestamp && savedHourTimestamp > 0) {
                     // Hour changed while app was closed - save previous hour data
@@ -148,18 +222,34 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                     if (stepsWhileAppWasClosed > 10 && previousHourStartSteps > 0) {
                         // App was closed in the same hour and steps were taken
                         // Restore previous baseline to preserve what steps we CAN track
+                        val hourTimestamp = java.util.Date(savedHourTimestamp)
+                        val now = java.util.Date()
                         android.util.Log.w(
                             "StepCounter",
-                            "APP CLOSED MID-HOUR: Detected $stepsWhileAppWasClosed steps taken while app closed. " +
-                                    "Restoring previous hour baseline ($previousHourStartSteps) to track current hour properly. " +
-                                    "Steps taken while closed are untrackable (sensor not monitored)."
+                            "APP CLOSED MID-HOUR: " +
+                                    "hourStartTime=$hourTimestamp | " +
+                                    "now=$now | " +
+                                    "stepsWhileClosed=$stepsWhileAppWasClosed | " +
+                                    "baseline=$previousHourStartSteps | " +
+                                    "current=$actualDeviceSteps | " +
+                                    "willShow=${actualDeviceSteps - previousHourStartSteps}"
                         )
                         sensorManager.setLastHourStartStepCount(previousHourStartSteps)
                         sensorManager.setLastKnownStepCount(actualDeviceSteps)
                         sensorManager.markInitialized()
                     } else {
                         // Normal case: app was just backgrounded/resumed in same hour
-                        android.util.Log.d("StepCounter", "App startup: Restoring same-hour state")
+                        val hourTimestamp = java.util.Date(savedHourTimestamp)
+                        val now = java.util.Date()
+                        android.util.Log.d(
+                            "StepCounter",
+                            "App startup: same-hour resume | " +
+                                    "hourStartTime=$hourTimestamp | " +
+                                    "now=$now | " +
+                                    "baseline=$previousHourStartSteps | " +
+                                    "current=$actualDeviceSteps | " +
+                                    "willShow=${actualDeviceSteps - previousHourStartSteps}"
+                        )
                         sensorManager.setLastHourStartStepCount(previousHourStartSteps)
                         sensorManager.setLastKnownStepCount(actualDeviceSteps)
                         sensorManager.markInitialized()
@@ -184,7 +274,10 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
             val lastStoredStartOfDay = preferences.lastStartOfDay.first()
 
             if (lastStoredStartOfDay > 0 && lastStoredStartOfDay != currentStartOfDay) {
-                android.util.Log.w("StepCounter", "DAY BOUNDARY DETECTED at startup: Previous day was ${java.util.Date(lastStoredStartOfDay)}, today is ${java.util.Date(currentStartOfDay)}")
+                android.util.Log.w(
+                    "StepCounter",
+                    "DAY BOUNDARY DETECTED: Previous=${java.util.Date(lastStoredStartOfDay)} | Today=${java.util.Date(currentStartOfDay)}"
+                )
 
                 // Reset for new day - set the hour baseline to current device steps
                 val currentDeviceSteps = sensorManager.getCurrentTotalSteps()
@@ -243,6 +336,27 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
             while (true) {
                 _currentTime.value = System.currentTimeMillis()
                 delay(1000) // Update every second
+            }
+        }
+
+        // Periodic diagnostic logging (every 30 seconds)
+        viewModelScope.launch {
+            while (true) {
+                delay(30000)  // Every 30 seconds
+                val currentHourSteps = sensorManager.currentStepCount.value
+                val hourlyStepsDisplayed = _hourlySteps.value
+                val dailyStepsDisplayed = _dailySteps.value
+                val currentDeviceTotal = sensorManager.getCurrentTotalSteps()
+
+                android.util.Log.i(
+                    "StepCounterDiagnostic",
+                    "DIAGNOSTIC: " +
+                            "currentDeviceTotal=$currentDeviceTotal | " +
+                            "sensorCurrentStepCount=${sensorManager.currentStepCount.value} | " +
+                            "displayedHourly=$hourlyStepsDisplayed | " +
+                            "displayedDaily=$dailyStepsDisplayed | " +
+                            "hour=${Calendar.getInstance().get(Calendar.HOUR_OF_DAY)}:${String.format("%02d", Calendar.getInstance().get(Calendar.MINUTE))}"
+                )
             }
         }
 

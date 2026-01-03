@@ -51,22 +51,30 @@ class StepSensorManager(context: Context) : SensorEventListener {
                 return
             }
 
-            android.util.Log.d("StepSensor", "Sensor fired: absolute steps = $stepCount, last hour start = $lastHourStartStepCount, isInitialized = $isInitialized, current delta = ${stepCount - lastHourStartStepCount}")
+            val stepsThisHour = stepCount - lastHourStartStepCount
+            android.util.Log.d(
+                "StepSensor",
+                "Sensor fired: absolute=$stepCount | hourBaseline=$lastHourStartStepCount | delta=$stepsThisHour | initialized=$isInitialized"
+            )
             previousSensorValue = stepCount  // Track for reset detection
             lastKnownStepCount = stepCount
             // Only update display if initialized (prevents showing full device total on first fire)
             if (isInitialized) {
                 updateStepsForCurrentHour()
             }
-            android.util.Log.d("StepSensor", "Updated: _currentStepCount = ${_currentStepCount.value}, lastKnownStepCount = $lastKnownStepCount")
         }
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     fun setLastHourStartStepCount(stepCount: Int) {
-        android.util.Log.d("StepSensor", "setLastHourStartStepCount: $stepCount (was $lastHourStartStepCount)")
+        val oldBaseline = lastHourStartStepCount
         lastHourStartStepCount = stepCount
+        android.util.Log.i(
+            "StepSensor",
+            "setLastHourStartStepCount: BASELINE_CHANGED from $oldBaseline to $stepCount | " +
+                    "lastKnown=$lastKnownStepCount | calculated delta would be ${lastKnownStepCount - stepCount}"
+        )
         updateStepsForCurrentHour()
     }
 

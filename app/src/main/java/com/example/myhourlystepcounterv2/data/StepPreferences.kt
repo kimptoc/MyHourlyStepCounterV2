@@ -15,6 +15,7 @@ class StepPreferences(private val context: Context) {
         val CURRENT_HOUR_TIMESTAMP = longPreferencesKey("current_hour_timestamp")
         val TOTAL_STEPS_DEVICE = intPreferencesKey("total_steps_device")
         val LAST_START_OF_DAY = longPreferencesKey("last_start_of_day")
+        val LAST_OPEN_DATE = longPreferencesKey("last_open_date")
     }
 
     val hourStartStepCount: Flow<Int> = context.dataStore.data
@@ -28,6 +29,9 @@ class StepPreferences(private val context: Context) {
 
     val lastStartOfDay: Flow<Long> = context.dataStore.data
         .map { preferences -> preferences[LAST_START_OF_DAY] ?: 0 }
+
+    val lastOpenDate: Flow<Long> = context.dataStore.data
+        .map { preferences -> preferences[LAST_OPEN_DATE] ?: 0 }
 
     suspend fun saveHourStartStepCount(stepCount: Int) {
         context.dataStore.updateData { preferences ->
@@ -67,6 +71,14 @@ class StepPreferences(private val context: Context) {
         context.dataStore.updateData { preferences ->
             preferences.toMutablePreferences().apply {
                 this[LAST_START_OF_DAY] = startOfDay
+            }
+        }
+    }
+
+    suspend fun saveLastOpenDate(date: Long) {
+        context.dataStore.updateData { preferences ->
+            preferences.toMutablePreferences().apply {
+                this[LAST_OPEN_DATE] = date
             }
         }
     }
