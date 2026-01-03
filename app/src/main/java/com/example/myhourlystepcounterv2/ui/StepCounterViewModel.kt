@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -175,25 +177,62 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
             }
         }
 
+        // Setup day boundary detection and daily step observation
+        viewModelScope.launch {
+            // Check for day boundary at startup
+            val currentStartOfDay = getStartOfDay()
+            val lastStoredStartOfDay = preferences.lastStartOfDay.first()
+
+            if (lastStoredStartOfDay > 0 && lastStoredStartOfDay != currentStartOfDay) {
+                android.util.Log.w("StepCounter", "DAY BOUNDARY DETECTED at startup: Previous day was ${java.util.Date(lastStoredStartOfDay)}, today is ${java.util.Date(currentStartOfDay)}")
+
+                // Reset for new day - set the hour baseline to current device steps
+                val currentDeviceSteps = sensorManager.getCurrentTotalSteps()
+                val currentHourTimestamp = Calendar.getInstance().apply {
+                    set(Calendar.MINUTE, 0)
+                    set(Calendar.SECOND, 0)
+                    set(Calendar.MILLISECOND, 0)
+                }.timeInMillis
+
+                android.util.Log.d("StepCounter", "Day reset: Setting new hour baseline to $currentDeviceSteps")
+                preferences.saveHourData(
+                    hourStartStepCount = currentDeviceSteps,
+                    currentTimestamp = currentHourTimestamp,
+                    totalSteps = currentDeviceSteps
+                )
+                sensorManager.setLastHourStartStepCount(currentDeviceSteps)
+                sensorManager.setLastKnownStepCount(currentDeviceSteps)
+            }
+
+            // Save the current start of day
+            preferences.saveStartOfDay(currentStartOfDay)
+        }
+
         // Observe daily steps (database + current hour)
-        val startOfDay = getStartOfDay()
         viewModelScope.launch {
             combine(
-                repository.getTotalStepsForDay(startOfDay),
+                preferences.lastStartOfDay,
                 sensorManager.currentStepCount
-            ) { dbTotal, currentHourSteps ->
-                // Add current hour's steps to the database total
-                val finalTotal = (dbTotal ?: 0) + currentHourSteps
-                android.util.Log.d("StepCounter", "Daily total calculated: dbTotal=$dbTotal, currentHourSteps=$currentHourSteps, final=$finalTotal")
-                finalTotal
+            ) { storedStartOfDay, currentHourSteps ->
+                val effectiveStartOfDay = if (storedStartOfDay > 0) storedStartOfDay else getStartOfDay()
+                Triple(effectiveStartOfDay, currentHourSteps, effectiveStartOfDay)  // Keep startOfDay for logging
+            }.flatMapLatest { (effectiveStartOfDay, currentHourSteps, _) ->
+                repository.getTotalStepsForDay(effectiveStartOfDay).combine(flowOf(currentHourSteps)) { dbTotal, hourSteps ->
+                    val finalTotal = (dbTotal ?: 0) + hourSteps
+                    android.util.Log.d("StepCounter", "Daily total calculated: dbTotal=$dbTotal, currentHourSteps=$hourSteps, final=$finalTotal, startOfDay=${java.util.Date(effectiveStartOfDay)}")
+                    finalTotal
+                }
             }.collect { total ->
                 _dailySteps.value = total
             }
         }
 
-        // Observe day history
+        // Observe day history (database entries for today)
         viewModelScope.launch {
-            repository.getStepsForDay(startOfDay).collect { steps ->
+            preferences.lastStartOfDay.flatMapLatest { storedStartOfDay ->
+                val effectiveStartOfDay = if (storedStartOfDay > 0) storedStartOfDay else getStartOfDay()
+                repository.getStepsForDay(effectiveStartOfDay)
+            }.collect { steps ->
                 android.util.Log.d("StepCounter", "History loaded: ${steps.size} entries - ${steps.map { "${it.timestamp}: ${it.stepCount}" }.joinToString(", ")}")
                 _dayHistory.value = steps
             }

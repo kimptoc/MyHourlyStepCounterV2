@@ -65,17 +65,20 @@ class StepSensorManager(context: Context) : SensorEventListener {
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     fun setLastHourStartStepCount(stepCount: Int) {
+        android.util.Log.d("StepSensor", "setLastHourStartStepCount: $stepCount (was $lastHourStartStepCount)")
         lastHourStartStepCount = stepCount
         updateStepsForCurrentHour()
     }
 
     fun setLastKnownStepCount(stepCount: Int) {
+        android.util.Log.d("StepSensor", "setLastKnownStepCount: $stepCount (was $lastKnownStepCount)")
         lastKnownStepCount = stepCount
         previousSensorValue = stepCount  // Update tracking for reset detection
         updateStepsForCurrentHour()
     }
 
     fun markInitialized() {
+        android.util.Log.d("StepSensor", "markInitialized: isInitialized=$isInitialized -> true. About to call updateStepsForCurrentHour()")
         isInitialized = true
         // Recalculate with current values now that we're initialized
         updateStepsForCurrentHour()
@@ -83,7 +86,9 @@ class StepSensorManager(context: Context) : SensorEventListener {
 
     private fun updateStepsForCurrentHour() {
         val stepsThisHour = lastKnownStepCount - lastHourStartStepCount
-        _currentStepCount.value = maxOf(0, stepsThisHour)
+        val finalValue = maxOf(0, stepsThisHour)
+        android.util.Log.d("StepSensor", "updateStepsForCurrentHour: lastKnown=$lastKnownStepCount - hourStart=$lastHourStartStepCount = $stepsThisHour -> finalValue=$finalValue, isInit=$isInitialized")
+        _currentStepCount.value = finalValue
     }
 
     fun resetForNewHour(currentStepCount: Int) {
