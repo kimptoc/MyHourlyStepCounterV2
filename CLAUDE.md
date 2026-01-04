@@ -215,3 +215,26 @@ when (currentDestination) {
 2. **Permission Smoke Tests:** Test runtime permission grant/deny scenarios at app level.
 3. **Production Monitoring:** Watch for edge case logs in real usage; adjust thresholds if needed.
 4. **Optional Low-Priority:** Consider UI improvements to show "estimated" label for distributed hours.
+
+---
+
+## Session Summary: Hour Distribution Bug Fix
+
+### Key Decisions Made
+
+1. **Calendar Iteration Bug Root Cause:** Identified critical bug where `calendar.apply { add(Calendar.HOUR_OF_DAY, 1) }` inside a loop **accumulates**—each iteration compounds the previous addition, skipping the first hour and adding an extra hour at the end.
+2. **Fix Strategy:** Replace accumulative `add()` with direct hour assignment using `set(Calendar.HOUR_OF_DAY, threshold + hour)`, creating a fresh calendar for each iteration to avoid side effects.
+3. **Impact Quantified:** Bug caused distribution of 1000 sensor-detected steps to only ~400 recorded steps (missing 600 steps from missed hours).
+
+### Code Patterns Established
+
+- **Fresh Calendar Per Iteration:** When calculating multiple hour timestamps in a loop, use `Calendar.getInstance()` each iteration and set absolute hour values instead of relative adjustments. Avoids mutation bugs.
+- **Direct Assignment vs Incremental:** Replace `calendar.apply { add(field, delta) }` patterns with `calendar.set(field, absoluteValue)` when iterating—safer and more readable.
+- **Diagnostic Logging in Loops:** Added per-iteration logs showing which hour receives which step count, enabling production debugging of distribution logic.
+
+### Next Steps Identified
+
+1. **Real-World Testing:** Deploy fix and verify daily totals match Samsung Health across closure scenarios.
+2. **Edge Case Regression Testing:** Run existing ClosurePeriodHandlingTest suite to ensure fix didn't break other closure logic.
+3. **Monitor Distributed Hour Logs:** Watch device logs for hour distribution patterns to confirm all hours are captured correctly.
+4. **Optional: Add Integration Test:** Create instrumentation test specifically for multi-hour closure scenarios to prevent regression.

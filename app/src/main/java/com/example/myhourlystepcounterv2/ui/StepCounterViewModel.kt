@@ -172,11 +172,17 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                                 }
 
                                 for (hour in 0 until hoursAwake) {
-                                    val hourTimestamp = thresholdCalendar.apply {
-                                        add(Calendar.HOUR_OF_DAY, 1)
-                                    }.timeInMillis
+                                    // Create fresh calendar for each hour to avoid accumulation
+                                    val hourCalendar = Calendar.getInstance().apply {
+                                        set(Calendar.HOUR_OF_DAY, StepTrackerConfig.MORNING_THRESHOLD_HOUR + hour)
+                                        set(Calendar.MINUTE, 0)
+                                        set(Calendar.SECOND, 0)
+                                        set(Calendar.MILLISECOND, 0)
+                                    }
+                                    val hourTimestamp = hourCalendar.timeInMillis
 
                                     val stepsClamped = minOf(stepsPerHour, StepTrackerConfig.MAX_STEPS_PER_HOUR)
+                                    android.util.Log.d("StepCounter", "Distributing: hour ${StepTrackerConfig.MORNING_THRESHOLD_HOUR + hour} ← $stepsClamped steps")
                                     repository.saveHourlySteps(hourTimestamp, stepsClamped)
                                 }
                             }
