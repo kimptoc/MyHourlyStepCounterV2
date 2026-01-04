@@ -190,3 +190,28 @@ when (currentDestination) {
 1. **Build fails with "Unable to strip native libraries"**: This is a warning for the graphics path library and doesn't affect functionality.
 2. **Theme not applying**: Ensure all Compose functions are wrapped with `MyHourlyStepCounterV2Theme` in previews and the root composable.
 3. **Navigation state lost on rotation**: State is preserved with `rememberSaveable` which handles configuration changes automatically.
+
+---
+
+## Session Summary: Closure Period Handling & Comprehensive Testing
+
+### Key Decisions Made
+
+1. **Smart Step Distribution:** When app reopens after closure, distribute steps intelligently based on time of day—early morning (before 10am) puts all steps in current hour; later (10am+) distributes evenly across waking hours assuming normal activity.
+2. **Day Boundary Handling:** Save yesterday's incomplete hour as 0 steps, assuming sleep period, preventing data corruption from incomplete hours.
+3. **Conservative Fallback:** When uncertain (sensor unavailable, corrupted data, permission denied), use 0 or cached values rather than risking invalid data.
+4. **Maximum Clamping:** Enforce 10,000 steps/hour maximum to prevent health app sync anomalies and sensor glitches from corrupting data.
+
+### Code Patterns Established
+
+- **Config.kt:** Centralized constants (MORNING_THRESHOLD_HOUR, MAX_STEPS_PER_HOUR) with read-only Profile display—no user edits allowed.
+- **Graceful Degradation:** Fallback priority: Sensor > DataStore Cache > Safe Default (0). Handles timeouts, permissions, and corruption independently.
+- **Preference Tracking:** Added `lastOpenDate` preference to detect day boundaries; tracks hour baselines across reboots.
+- **Extensive Logging:** Diagnostic logs at every decision point (day boundary, distribution logic, sensor reads) for production debugging.
+
+### Next Steps Identified
+
+1. **Integration Testing:** Add WorkManager TestDriver instrumentation tests to verify hourly boundary triggering end-to-end.
+2. **Permission Smoke Tests:** Test runtime permission grant/deny scenarios at app level.
+3. **Production Monitoring:** Watch for edge case logs in real usage; adjust thresholds if needed.
+4. **Optional Low-Priority:** Consider UI improvements to show "estimated" label for distributed hours.
