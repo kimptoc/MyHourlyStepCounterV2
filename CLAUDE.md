@@ -39,36 +39,104 @@ The Favorites tab should be renamed History and it should show the history of st
 app/
 ├── src/main/
 │   ├── java/com/example/myhourlystepcounterv2/
-│   │   ├── MainActivity.kt          # Entry point with NavigationSuiteScaffold
-│   │   └── ui/theme/
-│   │       ├── Theme.kt             # Material3 theme with dynamic colors
-│   │       ├── Color.kt
-│   │       └── Type.kt
-│   ├── res/                         # Resources (strings, colors, drawable, mipmap)
-│   └── AndroidManifest.xml
-├── src/test/                        # Unit tests (JUnit 4)
-├── src/androidTest/                 # Instrumented tests (Espresso + Compose)
-└── build.gradle.kts                 # App module configuration
+│   │   ├── MainActivity.kt                  # Entry point with edge-to-edge, permissions
+│   │   ├── PermissionHelper.kt              # ACTIVITY_RECOGNITION permission management
+│   │   ├── StepTrackerConfig.kt             # App-wide constants (thresholds, max values)
+│   │   ├── data/
+│   │   │   ├── StepEntity.kt                # Room entity for hourly step records
+│   │   │   ├── StepDao.kt                   # Room DAO with query methods
+│   │   │   ├── StepDatabase.kt              # Room database singleton
+│   │   │   ├── StepRepository.kt            # Data access layer (abstracts DB/preferences)
+│   │   │   └── StepPreferences.kt           # DataStore for caching sensor values
+│   │   ├── sensor/
+│   │   │   └── StepSensorManager.kt         # TYPE_STEP_COUNTER sensor listener
+│   │   ├── worker/
+│   │   │   ├── StepCounterWorker.kt         # WorkManager hourly background job
+│   │   │   └── WorkManagerScheduler.kt      # WorkManager configuration
+│   │   ├── ui/
+│   │   │   ├── App.kt                       # Navigation scaffold with AppDestinations
+│   │   │   ├── HomeScreen.kt                # Current hour + daily total display
+│   │   │   ├── HistoryScreen.kt             # Hourly breakdown list for the day
+│   │   │   ├── ProfileScreen.kt             # Configuration display (read-only)
+│   │   │   ├── StepCounterViewModel.kt      # MVVM ViewModel with business logic
+│   │   │   ├── StepCounterViewModelFactory.kt # Factory for DI
+│   │   │   └── theme/
+│   │   │       ├── Theme.kt                 # Material3 dynamic theming
+│   │   │       ├── Color.kt                 # Color palette
+│   │   │       └── Type.kt                  # Typography
+│   │   ├── res/                             # Resources (strings, colors, drawable, mipmap)
+│   │   └── AndroidManifest.xml
+│   ├── src/test/                            # Unit tests (74 tests across 9 test files)
+│   ├── src/androidTest/                     # Instrumented tests (Espresso + Compose)
+│   └── build.gradle.kts                     # App module configuration
 ```
 
 **Application Package:** `com.example.myhourlystepcounterv2`
 
 ## Architecture
 
-The app uses a single-activity architecture with Jetpack Compose:
+The app uses **MVVM architecture with Repository pattern** in a single-activity Jetpack Compose app:
 
-1. **MainActivity.kt:** The entry point that sets up edge-to-edge rendering and applies the theme.
+### Presentation Layer (UI)
+1. **MainActivity.kt:** Entry point that handles:
+   - Edge-to-edge rendering setup
+   - Runtime permission requests (ACTIVITY_RECOGNITION)
+   - ViewModel initialization via factory
+   - onResume() hook to refresh step counts when returning from other apps
 
-2. **MyHourlyStepCounterV2App():** The root composable that manages navigation state using `rememberSaveable` for state persistence across recompositions and configuration changes.
+2. **MyHourlyStepCounterV2App() (App.kt):** Root composable that:
+   - Manages navigation state using `rememberSaveable`
+   - Initializes ViewModel in LaunchedEffect with application context
+   - Uses NavigationSuiteScaffold for adaptive navigation (rail/bar/drawer based on screen size)
 
-3. **NavigationSuiteScaffold:** An adaptive navigation component from Material3 that automatically selects the best navigation UI (rail, bar, or drawer) based on screen size.
+3. **AppDestinations Enum:** Three navigation destinations:
+   - **HOME:** Real-time current hour step count (large display) + daily total (smaller)
+   - **HISTORY:** LazyColumn showing hourly breakdown for the day with timestamps
+   - **PROFILE:** Read-only config display (thresholds, max values from StepTrackerConfig)
 
-4. **AppDestinations Enum:** Defines three navigation destinations:
-   - HOME (with Home icon)
-   - FAVORITES (with Favorite icon)
-   - PROFILE (with AccountBox icon)
+4. **StepCounterViewModel:** MVVM ViewModel that:
+   - Manages UI state via StateFlows (hourlySteps, dailySteps, dayHistory, currentTime)
+   - Coordinates sensor, preferences, repository, and WorkManager
+   - Handles closure period detection with smart step distribution
+   - Detects day boundaries and resets baselines
+   - Updates display every second, listens to sensor events
+   - Schedules hour boundary checks for automatic hour transitions
 
-The UI currently displays a simple `Greeting` composable in the scaffold content area. New screens should be added as composable functions and conditionally displayed based on the `currentDestination` state.
+### Data Layer
+5. **StepRepository:** Data access abstraction over Room database
+   - Provides Flow-based queries for reactive UI updates
+   - Saves hourly step records with timestamps
+
+6. **Room Database:**
+   - **StepEntity:** Data class with id, timestamp, stepCount
+   - **StepDao:** DAO with queries (getStepsForDay, getTotalStepsForDay, saveHourlySteps)
+   - **StepDatabase:** Singleton database instance
+
+7. **StepPreferences (DataStore):** Caches critical values across reboots:
+   - `hourStartStepCount`: Baseline at hour start
+   - `totalStepsDevice`: Last known device total from sensor
+   - `currentHourTimestamp`: Current hour's start timestamp
+   - `lastStartOfDay`: Midnight timestamp for day boundary detection
+   - `lastOpenDate`: Timestamp for closure period detection
+
+### Sensor Layer
+8. **StepSensorManager:** Manages TYPE_STEP_COUNTER sensor:
+   - SensorEventListener that tracks step count changes
+   - Detects sensor resets (e.g., when Samsung Health accesses sensor)
+   - Maintains hour baseline and calculates delta for current hour
+   - Provides StateFlow for reactive UI updates
+
+### Background Processing
+9. **WorkManager:**
+   - **StepCounterWorker:** Hourly background job that reads sensor and saves to database
+   - **WorkManagerScheduler:** Configures PeriodicWorkRequest (1-hour interval)
+   - Handles edge cases: permission denied, sensor reset, stale timestamps
+
+### Key Patterns
+- **Closure Period Handling:** When app reopens after being backgrounded, distributes missed steps intelligently (early morning vs. later in day)
+- **Fallback Priority:** Sensor > DataStore Cache > Safe Default (0)
+- **Data Validation:** Clamps negative deltas to 0, caps unreasonable values at 10,000 steps/hour
+- **Extensive Logging:** Diagnostic logs at every critical decision point for production debugging
 
 ## Common Development Tasks
 
@@ -120,8 +188,11 @@ Dependencies are centralized in `gradle/libs.versions.toml`. When adding new dep
 - `androidx.core:core-ktx` - Core Kotlin extensions
 - `androidx.activity:activity-compose` - Compose integration with activities
 - `androidx.compose.*` - Compose UI framework (material3, adaptive-navigation-suite)
-- `androidx.lifecycle:lifecycle-runtime-ktx` - Lifecycle management
-- Testing: JUnit 4, Espresso, Compose UI test framework
+- `androidx.lifecycle:lifecycle-runtime-ktx` / `lifecycle-viewmodel-compose` - Lifecycle management and ViewModel
+- `androidx.room:room-runtime` / `room-ktx` - Room database for persistence
+- `androidx.datastore:datastore-preferences` - DataStore for caching sensor values
+- `androidx.work:work-runtime-ktx` - WorkManager for hourly background jobs
+- Testing: JUnit 4, Espresso, Compose UI test framework, Room testing
 
 ## Theme and Styling
 
@@ -147,35 +218,64 @@ When adding new UI components, always wrap them with `MyHourlyStepCounterV2Theme
 
 ## Testing Strategy
 
+The app has **74 comprehensive unit tests** across 9 test files covering edge cases and production reliability scenarios.
+
+### Test Coverage
 1. **Unit Tests** (`app/src/test/`): Test business logic using JUnit 4
+   - **WorkerEdgeCasesTest:** DataStore cached device total = 0, negative deltas, unreasonably large deltas, stale timestamps, permission denied, multiple edge cases combined
+   - **DataStoreFallbackTest:** Sensor timeout fallback, stale cache handling, cache corruption, race conditions, concurrent writes
+   - **SensorRolloverAndResetTest:** Sensor decreases (device reboot), sensor jumps unreasonably large (health app sync), boundary conditions, consecutive resets
+   - **ClosurePeriodHandlingTest:** Day boundary crossing, early morning reopening, step distribution across multiple hours, clamping to max
+   - **StepCounterViewModelTest, StepCounterEdgeCasesTest, StepCounterInitializationTest, InitializationOrderingTest, SensorInitializationTimeoutTest:** ViewModel initialization, sensor timing, closure period logic
+   - **StepRepositoryTest, SensorResetDetectionTest:** Data layer and sensor behavior
+
 2. **Instrumented Tests** (`app/src/androidTest/`): Test UI and Android-specific functionality using Compose test framework
 
-Example commands:
+### Running Tests
 ```bash
-./gradlew test -Dorg.gradle.debug=true  # Run with debugging
+./gradlew test                           # Run all unit tests (74 tests)
 ./gradlew testDebug                      # Run tests for debug variant only
+./gradlew test -Dorg.gradle.debug=true   # Run with debugging
+./gradlew connectedAndroidTest           # Run instrumented tests (requires device)
+./gradlew testDebug -k                   # Continue after failures
+./gradlew testDebug --tests "ClosurePeriodHandlingTest"  # Run specific test file
 ```
+
+### Test Philosophy
+- **Edge Case Focus:** Tests cover scenarios that occur in production (device reboots, corrupted preferences, permission changes, sensor resets)
+- **Conservative Validation:** Tests verify that invalid data is rejected and safe defaults are used
+- **Data Integrity:** Tests ensure step counts are never negative, never exceed reasonable maximums, and are preserved across edge cases
 
 ## Navigation Pattern
 
-When adding new destination screens:
-
-1. Add a new entry to `AppDestinations` enum with label and icon
-2. Create a new `@Composable` function for the screen
-3. Update `MyHourlyStepCounterV2App()` to conditionally render screens based on `currentDestination`
-
-Example:
+**Current Implementation (App.kt):**
 ```kotlin
-// In AppDestinations enum
-NEWSFEEDS("News Feed", Icons.Default.NotificationsActive),
+enum class AppDestinations(val label: String, val icon: ImageVector) {
+    HOME("Home", Icons.Filled.Home),
+    HISTORY("History", Icons.AutoMirrored.Filled.List),  // List icon for historical records
+    PROFILE("Profile", Icons.Filled.AccountBox),
+}
 
 // In MyHourlyStepCounterV2App composable
 when (currentDestination) {
-    AppDestinations.HOME -> HomeScreen()
-    AppDestinations.FAVORITES -> FavoritesScreen()
-    AppDestinations.PROFILE -> ProfileScreen()
-    AppDestinations.NEWSFEEDS -> NewsFeedScreen()
+    AppDestinations.HOME -> HomeScreen(viewModel, modifier)
+    AppDestinations.HISTORY -> HistoryScreen(viewModel, modifier)
+    AppDestinations.PROFILE -> ProfileScreen(modifier)
 }
+```
+
+**Adding new destination screens:**
+1. Add entry to `AppDestinations` enum with label and icon
+2. Create `@Composable` screen function (pass ViewModel if needed)
+3. Add `when` branch in `MyHourlyStepCounterV2App()` to render the screen
+
+Example (adding Settings):
+```kotlin
+// In AppDestinations enum
+SETTINGS("Settings", Icons.Default.Settings),
+
+// In MyHourlyStepCounterV2App when block
+AppDestinations.SETTINGS -> SettingsScreen(viewModel, modifier)
 ```
 
 ## Resources
@@ -190,6 +290,27 @@ when (currentDestination) {
 1. **Build fails with "Unable to strip native libraries"**: This is a warning for the graphics path library and doesn't affect functionality.
 2. **Theme not applying**: Ensure all Compose functions are wrapped with `MyHourlyStepCounterV2Theme` in previews and the root composable.
 3. **Navigation state lost on rotation**: State is preserved with `rememberSaveable` which handles configuration changes automatically.
+4. **Step count shows 0 after long closure**: Check logcat for "Closure period detected" logs. Verify smart distribution logic is distributing to correct hours.
+5. **Daily total doesn't match Samsung Health**: Check sensor reset logs. May indicate another app is accessing the sensor mid-read.
+
+## Key Configuration Constants
+
+**StepTrackerConfig.kt** - Read-only app-wide constants:
+```kotlin
+object StepTrackerConfig {
+    const val MORNING_THRESHOLD_HOUR = 10          // Before 10am = early morning
+    const val MAX_STEPS_PER_HOUR = 10000           // Cap for unreasonable values
+    const val MORNING_THRESHOLD_DISPLAY = "10:00 AM"
+    const val MAX_STEPS_DISPLAY = "10,000"
+}
+```
+
+**PermissionHelper.kt** - ACTIVITY_RECOGNITION permission management:
+- `hasActivityRecognitionPermission(context)`: Check if permission granted
+- `getRequiredPermissions()`: Returns array of permissions to request (API-level aware)
+- MainActivity requests permissions via `registerForActivityResult()` launcher
+
+**Important:** Do not allow user editing of StepTrackerConfig values. These are production-validated constants that ensure data integrity. ProfileScreen displays these values read-only for transparency.
 
 ---
 
@@ -238,3 +359,25 @@ when (currentDestination) {
 2. **Edge Case Regression Testing:** Run existing ClosurePeriodHandlingTest suite to ensure fix didn't break other closure logic.
 3. **Monitor Distributed Hour Logs:** Watch device logs for hour distribution patterns to confirm all hours are captured correctly.
 4. **Optional: Add Integration Test:** Create instrumentation test specifically for multi-hour closure scenarios to prevent regression.
+
+---
+
+## Session Summary: Documentation Update & UI Polish
+
+### Key Decisions Made
+
+1. **Code Review Against Spec:** Conducted comprehensive review of implementation against CLAUDE.md requirements. Identified documentation drift—architecture section described simple placeholder UI, but production has full MVVM + Repository pattern with 74 tests.
+2. **Documentation Overhaul:** Completely rewrote CLAUDE.md to reflect actual architecture (data/sensor/worker/ui packages), all dependencies (Room, DataStore, WorkManager), comprehensive test coverage, and key patterns (closure handling, fallback priority, validation).
+3. **UI Consistency Fix:** Fixed History tab icon duplication (was using Home icon). Selected `Icons.AutoMirrored.Filled.List` as semantically appropriate for historical records display.
+
+### Code Patterns Established
+
+- **Documentation as Code:** CLAUDE.md must stay synchronized with implementation. Document actual architecture, not aspirational or outdated descriptions.
+- **Semantic Icon Selection:** Choose Material icons that represent function (List for records history, not generic placeholders).
+- **Complete Architecture Documentation:** Document all layers (presentation, data, sensor, background), key patterns, and production-validated constants in project guidance files.
+
+### Next Steps Identified
+
+1. **Display Update Frequency:** Spec requires 3-second step count updates, but implementation uses event-driven sensor + 1-second clock. Monitor if current behavior is acceptable or needs throttling adjustment.
+2. **Documentation Maintenance:** Keep CLAUDE.md updated as architecture evolves to prevent future drift.
+3. **Optional: Deprecation Warnings:** Consider updating ProfileScreen to use `HorizontalDivider` instead of deprecated `Divider`.

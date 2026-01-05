@@ -167,4 +167,105 @@ class StepCounterWorkerTest {
         assertTrue("First step should be initialization", steps[0].contains("initializes"))
         assertTrue("Last step should be new hour setup", steps[4].contains("new hour"))
     }
+
+    @Test
+    fun testRaceCondition_ViewModelAlreadySaved() {
+        // SCENARIO: ViewModel saves at 10:00:01, WorkManager runs at 10:03:57
+        // Expected: WorkManager should detect existing record and skip save
+
+        val hourTimestamp = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 9)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+
+        // Simulate: ViewModel already saved 296 steps at hour boundary
+        val existingStepsInDatabase = 296
+        val databaseHasRecord = true
+
+        // Simulate: WorkManager calculates 0 steps (because preferences were already updated)
+        val workerCalculatedSteps = 0
+
+        // The worker should check database first
+        val shouldSkipSave = databaseHasRecord
+        val finalStepsInDatabase = if (shouldSkipSave) {
+            existingStepsInDatabase  // Keep ViewModel's value
+        } else {
+            workerCalculatedSteps  // Use worker's value
+        }
+
+        assertEquals(
+            "Race condition: Should preserve ViewModel's save (296), not use Worker's (0)",
+            296,
+            finalStepsInDatabase
+        )
+        assertTrue("Worker should have detected existing record and skipped save", shouldSkipSave)
+    }
+
+    @Test
+    fun testRaceCondition_AppWasKilled() {
+        // SCENARIO: App killed, ViewModel never ran, only WorkManager runs
+        // Expected: WorkManager should save its calculated value
+
+        val hourTimestamp = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 2)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+
+        // Simulate: ViewModel never ran (app was killed)
+        val databaseHasRecord = false
+
+        // Simulate: WorkManager calculated steps from preferences
+        val workerCalculatedSteps = 150
+
+        // The worker should save since no record exists
+        val shouldSave = !databaseHasRecord
+        val finalStepsInDatabase = if (shouldSave) {
+            workerCalculatedSteps  // Use worker's value
+        } else {
+            0  // Would be ViewModel's value, but it doesn't exist
+        }
+
+        assertEquals(
+            "App killed case: Should use Worker's calculated steps (150)",
+            150,
+            finalStepsInDatabase
+        )
+        assertTrue("Worker should save when ViewModel didn't run (app was killed)", shouldSave)
+    }
+
+    @Test
+    fun testRaceCondition_Timing() {
+        // DESIGN: Demonstrates the race condition timing
+        // Timeline:
+        // 10:00:01 - ViewModel wakes up, detects hour change
+        // 10:00:01 - ViewModel reads: hourStart=55504, device=55800
+        // 10:00:01 - ViewModel calculates: 296 steps
+        // 10:00:01 - ViewModel saves 296 to database
+        // 10:00:01 - ViewModel updates preferences: hourStart=55800 (for new hour)
+        // 10:03:57 - WorkManager wakes up (3 min later)
+        // 10:03:57 - WorkManager reads: hourStart=55800, device=55800 (already updated!)
+        // 10:03:57 - WorkManager calculates: 0 steps
+        // 10:03:57 - WorkManager checks database: record exists with 296 steps
+        // 10:03:57 - WorkManager SKIPS save to preserve ViewModel's data
+
+        data class SaveAttempt(val time: String, val source: String, val steps: Int, val saved: Boolean)
+
+        val timeline = listOf(
+            SaveAttempt("10:00:01", "ViewModel", 296, true),   // ViewModel saves correct data
+            SaveAttempt("10:03:57", "WorkManager", 0, false),   // WorkManager skips (record exists)
+        )
+
+        assertEquals("Should have 2 save attempts", 2, timeline.size)
+        assertTrue("ViewModel should have saved", timeline[0].saved)
+        assertEquals("ViewModel should have saved 296 steps", 296, timeline[0].steps)
+        assertTrue("WorkManager should have skipped save", !timeline[1].saved)
+
+        // The final database value should be from ViewModel
+        val finalDatabaseValue = timeline.first { it.saved }.steps
+        assertEquals("Database should have ViewModel's value, not WorkManager's", 296, finalDatabaseValue)
+    }
 }

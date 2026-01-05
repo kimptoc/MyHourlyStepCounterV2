@@ -3,6 +3,7 @@ package com.example.myhourlystepcounterv2.ui
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.AccountBox
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material3.Icon
@@ -25,9 +26,9 @@ enum class AppDestinations(
     val label: String,
     val icon: ImageVector,
 ) {
-    HOME("Home", Icons.Default.Home),
-    HISTORY("History", Icons.Default.Home), // Placeholder - will use different icon
-    PROFILE("Profile", Icons.Default.AccountBox),
+    HOME("Home", Icons.Filled.Home),
+    HISTORY("History", Icons.AutoMirrored.Filled.List),
+    PROFILE("Profile", Icons.Filled.AccountBox),
 }
 
 @PreviewScreenSizes

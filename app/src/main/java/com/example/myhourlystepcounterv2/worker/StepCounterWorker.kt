@@ -50,30 +50,55 @@ class StepCounterWorker(
             val hourStartStepCount = preferences.hourStartStepCount.first()
             val preferencesTotalSteps = preferences.totalStepsDevice.first()
 
+            android.util.Log.d(
+                "StepCounterWorker",
+                "DIAGNOSTIC: Retrieved from preferences - hourStart=$hourStartStepCount, totalDevice=$preferencesTotalSteps"
+            )
+
             // Try to get current device steps from sensor (in case app was just closed before sensor updated preferences)
             // This handles edge case: app closes immediately, then hour boundary crosses, preferences still has stale value
             var currentDeviceSteps = preferencesTotalSteps
+            var sensorReadSuccessful = false
             try {
                 val sensorMgr = applicationContext.getSystemService(android.content.Context.SENSOR_SERVICE)
                     as android.hardware.SensorManager
                 val stepSensor = sensorMgr.getDefaultSensor(android.hardware.Sensor.TYPE_STEP_COUNTER)
 
-                // Try to read sensor with short timeout
+                android.util.Log.d(
+                    "StepCounterWorker",
+                    "DIAGNOSTIC: Sensor available=${stepSensor != null}, hasPermission=$hasPermission"
+                )
+
+                // Try to read sensor with longer timeout for background context
                 if (stepSensor != null && hasPermission) {
                     val sensorHelper = com.example.myhourlystepcounterv2.sensor.StepSensorManager(applicationContext)
                     sensorHelper.startListening()
 
-                    // Wait up to 500ms for sensor to fire
-                    for (i in 0 until 5) {
+                    android.util.Log.d("StepCounterWorker", "DIAGNOSTIC: Started sensor listener, waiting for data...")
+
+                    // Wait up to 2000ms for sensor to fire (longer timeout for background)
+                    for (i in 0 until 20) {
                         val sensorValue = sensorHelper.getCurrentTotalSteps()
+                        android.util.Log.d(
+                            "StepCounterWorker",
+                            "DIAGNOSTIC: Retry $i: sensorValue=$sensorValue"
+                        )
                         if (sensorValue > 0) {
                             currentDeviceSteps = sensorValue
-                            android.util.Log.d("StepCounterWorker", "Successfully read sensor value: $sensorValue")
+                            sensorReadSuccessful = true
+                            android.util.Log.d("StepCounterWorker", "Successfully read sensor value: $sensorValue on retry $i")
                             break
                         }
                         Thread.sleep(100)
                     }
                     sensorHelper.stopListening()
+
+                    if (!sensorReadSuccessful) {
+                        android.util.Log.w(
+                            "StepCounterWorker",
+                            "DIAGNOSTIC: Sensor did not fire after 2000ms timeout"
+                        )
+                    }
 
                     // If sensor reading differs from preferences, log the difference
                     if (currentDeviceSteps != preferencesTotalSteps) {
@@ -83,65 +108,154 @@ class StepCounterWorker(
                                     "Using sensor value (app may have been closed before preferences updated)."
                         )
                     }
+                } else {
+                    android.util.Log.w(
+                        "StepCounterWorker",
+                        "DIAGNOSTIC: Cannot read sensor - sensor=${stepSensor != null}, permission=$hasPermission"
+                    )
                 }
             } catch (e: Exception) {
-                android.util.Log.d("StepCounterWorker", "Could not read sensor, using preferences value: ${e.message}")
+                android.util.Log.w(
+                    "StepCounterWorker",
+                    "Could not read sensor, using preferences value: ${e.message}",
+                    e
+                )
                 currentDeviceSteps = preferencesTotalSteps
             }
 
             android.util.Log.d(
                 "StepCounterWorker",
-                "Hour boundary: hourStart=$hourStartStepCount, current=$currentDeviceSteps"
+                "Hour boundary: hourStart=$hourStartStepCount, current=$currentDeviceSteps, sensorSuccess=$sensorReadSuccessful"
             )
 
-            // Calculate steps during the completed hour using cached preference value
-            val stepsInPreviousHour = if (currentDeviceSteps > 0 && hourStartStepCount > 0) {
-                val delta = currentDeviceSteps - hourStartStepCount
+            // Calculate steps during the completed hour
+            val stepsInPreviousHour = when {
+                currentDeviceSteps > 0 && hourStartStepCount > 0 -> {
+                    // Normal case: both values available, calculate delta
+                    val delta = currentDeviceSteps - hourStartStepCount
 
-                // Validate delta
-                val validatedDelta = when {
-                    delta < 0 -> {
-                        android.util.Log.w(
-                            "StepCounterWorker",
-                            "Negative delta ($delta). Sensor may have reset. Using 0."
-                        )
-                        0
+                    android.util.Log.d(
+                        "StepCounterWorker",
+                        "DIAGNOSTIC: Normal delta calculation: $currentDeviceSteps - $hourStartStepCount = $delta"
+                    )
+
+                    // Validate delta
+                    when {
+                        delta < 0 -> {
+                            android.util.Log.w(
+                                "StepCounterWorker",
+                                "DIAGNOSTIC: Negative delta ($delta). Sensor reset detected. Saving 0."
+                            )
+                            0
+                        }
+                        delta > 10000 -> {
+                            android.util.Log.w(
+                                "StepCounterWorker",
+                                "DIAGNOSTIC: Unreasonable delta ($delta). Possible sensor glitch. Clamping to 10000."
+                            )
+                            10000
+                        }
+                        else -> {
+                            android.util.Log.d(
+                                "StepCounterWorker",
+                                "DIAGNOSTIC: Valid delta: $delta steps"
+                            )
+                            delta
+                        }
                     }
-                    delta > 10000 -> {
-                        android.util.Log.w(
-                            "StepCounterWorker",
-                            "Unreasonable delta ($delta). Clamping to 10000."
-                        )
-                        10000
-                    }
-                    else -> delta
                 }
-                validatedDelta
-            } else if (hourStartStepCount == 0 && currentDeviceSteps == 0) {
-                // First run or no data yet
-                0
-            } else if (hourStartStepCount > currentDeviceSteps) {
-                // Sensor reset between hours
-                android.util.Log.w(
-                    "StepCounterWorker",
-                    "Sensor reset detected (start=$hourStartStepCount > current=$currentDeviceSteps)"
-                )
-                0
-            } else {
-                0
+
+                hourStartStepCount == 0 && currentDeviceSteps == 0 -> {
+                    // Both zero: First run ever, no sensor data, or device just booted
+                    android.util.Log.w(
+                        "StepCounterWorker",
+                        "DIAGNOSTIC: Both values are 0. Could be first run, no sensor data, or fresh boot. Saving 0."
+                    )
+                    0
+                }
+
+                hourStartStepCount == 0 && currentDeviceSteps > 0 -> {
+                    // Missing baseline: App was killed before preferences were initialized
+                    android.util.Log.w(
+                        "StepCounterWorker",
+                        "DIAGNOSTIC: MISSING BASELINE - hourStart=0 but sensor=$currentDeviceSteps. " +
+                                "App was likely killed before hour started. Cannot calculate delta. Saving 0 for this hour. " +
+                                "Will initialize baseline=$currentDeviceSteps for next hour."
+                    )
+                    0
+                }
+
+                hourStartStepCount > 0 && currentDeviceSteps == 0 -> {
+                    // Sensor unavailable: Can't read sensor in background
+                    android.util.Log.w(
+                        "StepCounterWorker",
+                        "DIAGNOSTIC: SENSOR UNAVAILABLE - hourStart=$hourStartStepCount but sensor=0. " +
+                                "Cannot read sensor in background. Saving 0 for this hour."
+                    )
+                    0
+                }
+
+                hourStartStepCount > currentDeviceSteps -> {
+                    // Sensor reset between hours (e.g., device rebooted)
+                    android.util.Log.w(
+                        "StepCounterWorker",
+                        "DIAGNOSTIC: SENSOR RESET - start=$hourStartStepCount > current=$currentDeviceSteps. " +
+                                "Device likely rebooted. Saving 0 for this hour."
+                    )
+                    0
+                }
+
+                else -> {
+                    // Shouldn't reach here, but defensive programming
+                    android.util.Log.e(
+                        "StepCounterWorker",
+                        "DIAGNOSTIC: UNEXPECTED STATE - hourStart=$hourStartStepCount, current=$currentDeviceSteps. " +
+                                "Saving 0 for safety."
+                    )
+                    0
+                }
             }
 
             android.util.Log.d(
                 "StepCounterWorker",
-                "Saving $stepsInPreviousHour steps for hour at $previousHourTimestamp"
+                "DIAGNOSTIC: Preparing to save - previousHour=$previousHourTimestamp, steps=$stepsInPreviousHour"
             )
 
-            // Save the completed hour's data
-            val previousHourRecord = StepEntity(
-                timestamp = previousHourTimestamp,
-                stepCount = maxOf(0, stepsInPreviousHour)
-            )
-            repository.saveHourlySteps(previousHourRecord.timestamp, previousHourRecord.stepCount)
+            // Check if this hour has already been saved by the ViewModel
+            // This prevents race condition where both ViewModel and WorkManager save the same hour
+            val existingRecord = database.stepDao().getStepForHour(previousHourTimestamp)
+
+            if (existingRecord != null) {
+                val savedTime = java.text.SimpleDateFormat(
+                    "yyyy-MM-dd HH:mm:ss",
+                    java.util.Locale.getDefault()
+                ).format(java.util.Date(previousHourTimestamp))
+
+                android.util.Log.i(
+                    "StepCounterWorker",
+                    "⚠️ SKIPPING SAVE: Hour $savedTime already has ${existingRecord.stepCount} steps " +
+                            "(saved by ViewModel). WorkManager would have saved $stepsInPreviousHour. " +
+                            "Keeping ViewModel's value to avoid race condition."
+                )
+            } else {
+                // Hour not yet saved - save our calculated value
+                // This handles case where app was killed and ViewModel never ran
+                val previousHourRecord = StepEntity(
+                    timestamp = previousHourTimestamp,
+                    stepCount = maxOf(0, stepsInPreviousHour)
+                )
+                repository.saveHourlySteps(previousHourRecord.timestamp, previousHourRecord.stepCount)
+
+                val savedTime = java.text.SimpleDateFormat(
+                    "yyyy-MM-dd HH:mm:ss",
+                    java.util.Locale.getDefault()
+                ).format(java.util.Date(previousHourTimestamp))
+
+                android.util.Log.i(
+                    "StepCounterWorker",
+                    "✓ SAVED: Hour $savedTime → $stepsInPreviousHour steps (ViewModel did not save, app may have been killed)"
+                )
+            }
 
             // Update preferences for the new hour that's starting
             preferences.saveHourData(
@@ -150,9 +264,14 @@ class StepCounterWorker(
                 totalSteps = currentDeviceSteps
             )
 
-            android.util.Log.d(
+            val nextHourTime = java.text.SimpleDateFormat(
+                "yyyy-MM-dd HH:mm:ss",
+                java.util.Locale.getDefault()
+            ).format(java.util.Date(currentHourTimestamp))
+
+            android.util.Log.i(
                 "StepCounterWorker",
-                "New hour initialized: timestamp=$currentHourTimestamp, startSteps=$currentDeviceSteps"
+                "✓ INITIALIZED NEXT HOUR: $nextHourTime with baseline=$currentDeviceSteps"
             )
 
             Result.success()
