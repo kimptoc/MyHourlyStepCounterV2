@@ -427,12 +427,34 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                     )
 
                     val hourStartStepCount = preferences.hourStartStepCount.first()
-                    // CRITICAL: Use stored device total from preferences, not sensor (which may be stale)
-                    val currentDeviceSteps = preferences.totalStepsDevice.first()
+
+                    // Use LIVE sensor value at hour boundary, not cached preferences
+                    // The sensor has the most accurate current value; preferences may be stale
+                    // if sensor hasn't fired recently (e.g., app backgrounded)
+                    val liveSensorValue = sensorManager.getCurrentTotalSteps()
+                    val cachedPrefsValue = preferences.totalStepsDevice.first()
+
+                    // Prefer live sensor if available; fall back to prefs if sensor returns 0
+                    val currentDeviceSteps = if (liveSensorValue > 0) {
+                        if (liveSensorValue != cachedPrefsValue) {
+                            android.util.Log.w(
+                                "StepCounter",
+                                "Hour boundary: Using LIVE sensor ($liveSensorValue) instead of stale preferences ($cachedPrefsValue). " +
+                                        "Difference: ${liveSensorValue - cachedPrefsValue} steps would have been lost."
+                            )
+                        }
+                        liveSensorValue
+                    } else {
+                        android.util.Log.d(
+                            "StepCounter",
+                            "Hour boundary: Sensor unavailable (0), using cached preferences value: $cachedPrefsValue"
+                        )
+                        cachedPrefsValue
+                    }
 
                     android.util.Log.d(
                         "StepCounter",
-                        "ViewModel hour save: hourStart=$hourStartStepCount, currentDevice=$currentDeviceSteps"
+                        "ViewModel hour save: hourStart=$hourStartStepCount, currentDevice=$currentDeviceSteps (live=$liveSensorValue, cached=$cachedPrefsValue)"
                     )
 
                     // Calculate steps in the previous hour
