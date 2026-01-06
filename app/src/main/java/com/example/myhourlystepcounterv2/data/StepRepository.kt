@@ -19,6 +19,10 @@ class StepRepository(private val stepDao: StepDao) {
         return stepDao.getTotalStepsForDay(startOfDay)
     }
 
+    fun getTotalStepsForDayExcludingCurrentHour(startOfDay: Long, currentHourTimestamp: Long): Flow<Int?> {
+        return stepDao.getTotalStepsForDayExcludingCurrentHour(startOfDay, currentHourTimestamp)
+    }
+
     suspend fun deleteOldSteps(cutoffTime: Long) {
         stepDao.deleteOldSteps(cutoffTime)
     }

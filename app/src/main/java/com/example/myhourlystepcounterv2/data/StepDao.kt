@@ -22,4 +22,7 @@ interface StepDao {
 
     @Query("SELECT SUM(stepCount) FROM hourly_steps WHERE timestamp >= :startOfDay")
     fun getTotalStepsForDay(startOfDay: Long): Flow<Int?>
+
+    @Query("SELECT SUM(stepCount) FROM hourly_steps WHERE timestamp >= :startOfDay AND timestamp != :currentHourTimestamp")
+    fun getTotalStepsForDayExcludingCurrentHour(startOfDay: Long, currentHourTimestamp: Long): Flow<Int?>
 }

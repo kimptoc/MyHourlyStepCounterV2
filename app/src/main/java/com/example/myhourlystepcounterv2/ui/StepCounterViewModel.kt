@@ -327,16 +327,23 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
         viewModelScope.launch {
             combine(
                 preferences.lastStartOfDay,
+                preferences.currentHourTimestamp,
                 sensorManager.currentStepCount
-            ) { storedStartOfDay, currentHourSteps ->
+            ) { storedStartOfDay, currentHourTimestamp, currentHourSteps ->
                 val effectiveStartOfDay = if (storedStartOfDay > 0) storedStartOfDay else getStartOfDay()
-                Triple(effectiveStartOfDay, currentHourSteps, effectiveStartOfDay)  // Keep startOfDay for logging
-            }.flatMapLatest { (effectiveStartOfDay, currentHourSteps, _) ->
-                repository.getTotalStepsForDay(effectiveStartOfDay).combine(flowOf(currentHourSteps)) { dbTotal, hourSteps ->
-                    val finalTotal = (dbTotal ?: 0) + hourSteps
-                    android.util.Log.d("StepCounter", "Daily total calculated: dbTotal=$dbTotal, currentHourSteps=$hourSteps, final=$finalTotal, startOfDay=${java.util.Date(effectiveStartOfDay)}")
-                    finalTotal
-                }
+                Triple(effectiveStartOfDay, currentHourTimestamp, currentHourSteps)
+            }.flatMapLatest { (effectiveStartOfDay, currentHourTimestamp, currentHourSteps) ->
+                // Use new query that excludes current hour to avoid double-counting
+                repository.getTotalStepsForDayExcludingCurrentHour(effectiveStartOfDay, currentHourTimestamp)
+                    .combine(flowOf(currentHourSteps)) { dbTotal, hourSteps ->
+                        val finalTotal = (dbTotal ?: 0) + hourSteps
+                        android.util.Log.d(
+                            "StepCounter",
+                            "Daily total calculated: dbTotal=$dbTotal (excluding current hour $currentHourTimestamp=${java.util.Date(currentHourTimestamp)}), " +
+                                    "currentHourSteps=$hourSteps, final=$finalTotal, startOfDay=${java.util.Date(effectiveStartOfDay)}"
+                        )
+                        finalTotal
+                    }
             }.collect { total ->
                 _dailySteps.value = total
             }
