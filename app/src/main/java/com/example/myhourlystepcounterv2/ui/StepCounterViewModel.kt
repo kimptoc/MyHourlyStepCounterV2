@@ -26,6 +26,14 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
     private lateinit var sensorManager: StepSensorManager
     private lateinit var preferences: StepPreferences
 
+    // Guards to prevent duplicate initialization and concurrent hour checks
+    @Volatile
+    private var isInitialized = false
+    @Volatile
+    private var isCheckingHourBoundary = false
+    @Volatile
+    private var isHourCheckScheduled = false
+
     private val _hourlySteps = MutableStateFlow(0)
     val hourlySteps: StateFlow<Int> = _hourlySteps.asStateFlow()
 
@@ -44,6 +52,14 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
      * to avoid context leaks in long-lived objects (sensor manager, preferences, WorkManager).
      */
     fun initialize(context: Context) {
+        // Guard against multiple initialize() calls
+        if (isInitialized) {
+            android.util.Log.w("StepCounter", "initialize() called but already initialized - ignoring duplicate call")
+            return
+        }
+        isInitialized = true
+        android.util.Log.d("StepCounter", "initialize() starting...")
+
         sensorManager = StepSensorManager(context)
         preferences = StepPreferences(context)
 
@@ -379,6 +395,14 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
      * lateinit exceptions. This is called automatically from initialize().
      */
     fun scheduleHourBoundaryCheck() {
+        // Guard against multiple scheduling loops
+        if (isHourCheckScheduled) {
+            android.util.Log.w("StepCounter", "scheduleHourBoundaryCheck() already scheduled - ignoring duplicate call")
+            return
+        }
+        isHourCheckScheduled = true
+        android.util.Log.d("StepCounter", "scheduleHourBoundaryCheck() starting schedule loop...")
+
         viewModelScope.launch {
             while (true) {
                 val now = Calendar.getInstance()
@@ -399,6 +423,12 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
     }
 
     fun checkAndResetHour() {
+        // Guard against concurrent hour boundary checks
+        if (isCheckingHourBoundary) {
+            android.util.Log.d("StepCounter", "checkAndResetHour() already in progress - skipping duplicate call")
+            return
+        }
+
         val calendar = Calendar.getInstance()
         val currentHourTimestamp = calendar.apply {
             set(Calendar.MINUTE, 0)
@@ -408,6 +438,7 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
 
         viewModelScope.launch {
             try {
+                isCheckingHourBoundary = true
                 val savedHourTimestamp = preferences.currentHourTimestamp.first()
 
                 if (currentHourTimestamp != savedHourTimestamp) {
@@ -495,6 +526,8 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                 }
             } catch (e: Exception) {
                 android.util.Log.e("StepCounter", "Error in checkAndResetHour", e)
+            } finally {
+                isCheckingHourBoundary = false
             }
         }
     }
