@@ -436,6 +436,9 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
             return
         }
 
+        // Set flag BEFORE launching coroutine to prevent race condition
+        isCheckingHourBoundary = true
+
         val calendar = Calendar.getInstance()
         val currentHourTimestamp = calendar.apply {
             set(Calendar.MINUTE, 0)
@@ -445,7 +448,6 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
 
         viewModelScope.launch {
             try {
-                isCheckingHourBoundary = true
                 val savedHourTimestamp = preferences.currentHourTimestamp.first()
 
                 if (currentHourTimestamp != savedHourTimestamp) {
