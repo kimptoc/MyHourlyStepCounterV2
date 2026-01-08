@@ -52,12 +52,14 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
      * to avoid context leaks in long-lived objects (sensor manager, preferences, WorkManager).
      */
     fun initialize(context: Context) {
-        // Guard against multiple initialize() calls
-        if (isInitialized) {
-            android.util.Log.w("StepCounter", "initialize() called but already initialized - ignoring duplicate call")
-            return
+        // Guard against multiple initialize() calls with atomic check-and-set
+        synchronized(this) {
+            if (isInitialized) {
+                android.util.Log.w("StepCounter", "initialize() called but already initialized - ignoring duplicate call")
+                return
+            }
+            isInitialized = true
         }
-        isInitialized = true
         android.util.Log.d("StepCounter", "initialize() starting...")
 
         sensorManager = StepSensorManager(context)
@@ -402,12 +404,14 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
      * lateinit exceptions. This is called automatically from initialize().
      */
     fun scheduleHourBoundaryCheck() {
-        // Guard against multiple scheduling loops
-        if (isHourCheckScheduled) {
-            android.util.Log.w("StepCounter", "scheduleHourBoundaryCheck() already scheduled - ignoring duplicate call")
-            return
+        // Guard against multiple scheduling loops with atomic check-and-set
+        synchronized(this) {
+            if (isHourCheckScheduled) {
+                android.util.Log.w("StepCounter", "scheduleHourBoundaryCheck() already scheduled - ignoring duplicate call")
+                return
+            }
+            isHourCheckScheduled = true
         }
-        isHourCheckScheduled = true
         android.util.Log.d("StepCounter", "scheduleHourBoundaryCheck() starting schedule loop...")
 
         viewModelScope.launch {
@@ -430,14 +434,14 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
     }
 
     fun checkAndResetHour() {
-        // Guard against concurrent hour boundary checks
-        if (isCheckingHourBoundary) {
-            android.util.Log.d("StepCounter", "checkAndResetHour() already in progress - skipping duplicate call")
-            return
+        // Guard against concurrent hour boundary checks with atomic check-and-set
+        synchronized(this) {
+            if (isCheckingHourBoundary) {
+                android.util.Log.d("StepCounter", "checkAndResetHour() already in progress - skipping duplicate call")
+                return
+            }
+            isCheckingHourBoundary = true
         }
-
-        // Set flag BEFORE launching coroutine to prevent race condition
-        isCheckingHourBoundary = true
 
         val calendar = Calendar.getInstance()
         val currentHourTimestamp = calendar.apply {
