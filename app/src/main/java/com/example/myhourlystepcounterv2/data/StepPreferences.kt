@@ -3,6 +3,7 @@ package com.example.myhourlystepcounterv2.data
 import android.content.Context
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -16,6 +17,15 @@ class StepPreferences(private val context: Context) {
         val TOTAL_STEPS_DEVICE = intPreferencesKey("total_steps_device")
         val LAST_START_OF_DAY = longPreferencesKey("last_start_of_day")
         val LAST_OPEN_DATE = longPreferencesKey("last_open_date")
+        val LAST_DISTRIBUTION_TIME = longPreferencesKey("last_distribution_time")
+
+        // New preferences: permanent notification and wake lock
+        val PERMANENT_NOTIFICATION_ENABLED = booleanPreferencesKey("permanent_notification_enabled")
+        val USE_WAKE_LOCK = booleanPreferencesKey("use_wake_lock")
+
+        // Defaults (user requested defaults ON)
+        const val PERMANENT_NOTIFICATION_DEFAULT = true
+        const val USE_WAKE_LOCK_DEFAULT = true
     }
 
     val hourStartStepCount: Flow<Int> = context.dataStore.data
@@ -32,6 +42,32 @@ class StepPreferences(private val context: Context) {
 
     val lastOpenDate: Flow<Long> = context.dataStore.data
         .map { preferences -> preferences[LAST_OPEN_DATE] ?: 0 }
+
+    val lastDistributionTime: Flow<Long> = context.dataStore.data
+        .map { preferences -> preferences[LAST_DISTRIBUTION_TIME] ?: 0 }
+
+    // New flows for permanent notification and wake-lock
+    val permanentNotificationEnabled: Flow<Boolean> = context.dataStore.data
+        .map { preferences -> preferences[PERMANENT_NOTIFICATION_ENABLED] ?: PERMANENT_NOTIFICATION_DEFAULT }
+
+    val useWakeLock: Flow<Boolean> = context.dataStore.data
+        .map { preferences -> preferences[USE_WAKE_LOCK] ?: USE_WAKE_LOCK_DEFAULT }
+
+    suspend fun savePermanentNotificationEnabled(enabled: Boolean) {
+        context.dataStore.updateData { preferences ->
+            preferences.toMutablePreferences().apply {
+                this[PERMANENT_NOTIFICATION_ENABLED] = enabled
+            }
+        }
+    }
+
+    suspend fun saveUseWakeLock(enabled: Boolean) {
+        context.dataStore.updateData { preferences ->
+            preferences.toMutablePreferences().apply {
+                this[USE_WAKE_LOCK] = enabled
+            }
+        }
+    }
 
     suspend fun saveHourStartStepCount(stepCount: Int) {
         context.dataStore.updateData { preferences ->
@@ -79,6 +115,14 @@ class StepPreferences(private val context: Context) {
         context.dataStore.updateData { preferences ->
             preferences.toMutablePreferences().apply {
                 this[LAST_OPEN_DATE] = date
+            }
+        }
+    }
+
+    suspend fun saveLastDistributionTime(timestamp: Long) {
+        context.dataStore.updateData { preferences ->
+            preferences.toMutablePreferences().apply {
+                this[LAST_DISTRIBUTION_TIME] = timestamp
             }
         }
     }

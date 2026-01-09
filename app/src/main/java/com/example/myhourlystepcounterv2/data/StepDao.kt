@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -25,4 +26,27 @@ interface StepDao {
 
     @Query("SELECT SUM(stepCount) FROM hourly_steps WHERE timestamp >= :startOfDay AND timestamp != :currentHourTimestamp")
     fun getTotalStepsForDayExcludingCurrentHour(startOfDay: Long, currentHourTimestamp: Long): Flow<Int?>
+
+    /**
+     * Atomically save hourly steps with conflict prevention.
+     * If a record already exists, only update if new value is higher.
+     * This prevents WorkManager from overwriting ViewModel's closure distribution.
+     */
+    @Transaction
+    suspend fun saveHourlyStepsAtomic(timestamp: Long, stepCount: Int) {
+        val existing = getStepForHour(timestamp)
+        if (existing == null) {
+            // No record yet - insert
+            insertStep(StepEntity(timestamp = timestamp, stepCount = stepCount))
+        } else if (stepCount > existing.stepCount) {
+            // Existing record but new value is higher - update
+            insertStep(StepEntity(timestamp = timestamp, stepCount = stepCount))
+        } else {
+            // Existing record is higher or equal - keep it
+            android.util.Log.w(
+                "StepDao",
+                "Skipping save for hour ${java.util.Date(timestamp)}: existing=${existing.stepCount}, new=$stepCount (keeping existing)"
+            )
+        }
+    }
 }

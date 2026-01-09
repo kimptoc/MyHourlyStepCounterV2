@@ -50,6 +50,27 @@ class StepCounterWorker(
             val hourStartStepCount = preferences.hourStartStepCount.first()
             val preferencesTotalSteps = preferences.totalStepsDevice.first()
 
+            // Check if ViewModel recently completed closure distribution
+            // If so, defer to avoid race condition (2 min grace period)
+            val lastDistributionTime = preferences.lastDistributionTime.first()
+            val timeSinceDistribution = System.currentTimeMillis() - lastDistributionTime
+            val DISTRIBUTION_GRACE_PERIOD_MS = 2 * 60 * 1000  // 2 minutes
+
+            if (timeSinceDistribution < DISTRIBUTION_GRACE_PERIOD_MS && lastDistributionTime > 0) {
+                android.util.Log.w(
+                    "StepCounterWorker",
+                    "ViewModel distribution completed ${timeSinceDistribution / 1000}s ago - deferring WorkManager save to avoid conflicts"
+                )
+                // Distribution happened recently - let ViewModel's values settle
+                // Just update preferences for next hour and exit
+                preferences.saveHourData(
+                    hourStartStepCount = preferencesTotalSteps,
+                    currentTimestamp = currentHourTimestamp,
+                    totalSteps = preferencesTotalSteps
+                )
+                return Result.success()
+            }
+
             android.util.Log.d(
                 "StepCounterWorker",
                 "DIAGNOSTIC: Retrieved from preferences - hourStart=$hourStartStepCount, totalDevice=$preferencesTotalSteps"

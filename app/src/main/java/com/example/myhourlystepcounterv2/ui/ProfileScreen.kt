@@ -9,7 +9,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Divider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.collectAsState
+import androidx.compose.foundation.layout.Row
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -143,5 +150,59 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
         }
 
         Spacer(modifier = Modifier.height(16.dp))
+
+        // Permanent notification & wake-lock toggles
+        Column(
+            horizontalAlignment = Alignment.Start,
+            modifier = Modifier.padding(16.dp)
+        ) {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val preferences = remember { com.example.myhourlystepcounterv2.data.StepPreferences(context.applicationContext) }
+            val coroutineScope = rememberCoroutineScope()
+
+            // Permanent notification toggle (defaults to ON)
+            val permanentEnabled by preferences.permanentNotificationEnabled.collectAsState(initial = com.example.myhourlystepcounterv2.data.StepPreferences.PERMANENT_NOTIFICATION_DEFAULT)
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(vertical = 8.dp)
+            ) {
+                Text(
+                    text = "Permanent notification",
+                    modifier = Modifier.weight(1f)
+                )
+                androidx.compose.material3.Switch(
+                    checked = permanentEnabled,
+                    onCheckedChange = { newVal -> coroutineScope.launch { preferences.savePermanentNotificationEnabled(newVal) } }
+                )
+            }
+
+            // Wake-lock toggle (defaults to ON)
+            val wakeEnabled by preferences.useWakeLock.collectAsState(initial = com.example.myhourlystepcounterv2.data.StepPreferences.USE_WAKE_LOCK_DEFAULT)
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(vertical = 8.dp)
+            ) {
+                Text(
+                    text = "Keep processor awake (wake-lock)",
+                    modifier = Modifier.weight(1f)
+                )
+                androidx.compose.material3.Switch(
+                    checked = wakeEnabled,
+                    onCheckedChange = { newVal -> coroutineScope.launch { preferences.saveUseWakeLock(newVal) } }
+                )
+            }
+
+            // Battery warning for wake-lock
+            if (wakeEnabled) {
+                Text(
+                    text = "⚠️ Wake-lock may significantly impact battery life",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(start = 16.dp, top = 4.dp, bottom = 8.dp)
+                )
+            }
+        }
     }
 }

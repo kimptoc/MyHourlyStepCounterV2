@@ -4,7 +4,8 @@ import kotlinx.coroutines.flow.Flow
 
 class StepRepository(private val stepDao: StepDao) {
     suspend fun saveHourlySteps(timestamp: Long, stepCount: Int) {
-        stepDao.insertStep(StepEntity(timestamp = timestamp, stepCount = stepCount))
+        // Use atomic save to prevent race conditions (keeps higher value)
+        stepDao.saveHourlyStepsAtomic(timestamp, stepCount)
     }
 
     suspend fun getStepForHour(timestamp: Long): StepEntity? {

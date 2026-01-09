@@ -12,9 +12,10 @@ object WorkManagerScheduler {
     const val STEP_COUNTER_INTERVAL_MINUTES = 15
 
     fun scheduleHourlyStepCounter(context: Context) {
+        // WorkManager supports java.time.Duration overloads - be explicit to avoid overload ambiguity
         val stepCounterWork = PeriodicWorkRequestBuilder<StepCounterWorker>(
-            STEP_COUNTER_INTERVAL_MINUTES, // repeat interval (minutes)
-            TimeUnit.MINUTES
+            java.time.Duration.ofMinutes(STEP_COUNTER_INTERVAL_MINUTES.toLong()),
+            java.time.Duration.ofMinutes(5)
         ).build()
 
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(

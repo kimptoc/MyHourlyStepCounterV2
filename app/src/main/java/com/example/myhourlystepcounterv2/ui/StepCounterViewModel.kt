@@ -169,8 +169,15 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
 
                         if (isEarlyMorning) {
                             // Early morning (before 10am): put all steps in current hour
-                            android.util.Log.i("StepCounter", "Early morning: putting all $stepsWhileClosed steps in current hour")
-                            // Current hour baseline will be set below to show the steps
+                            val stepsClamped = minOf(stepsWhileClosed, StepTrackerConfig.MAX_STEPS_PER_HOUR)
+                            android.util.Log.i("StepCounter", "Early morning: SAVING $stepsClamped steps to current hour ${java.util.Date(currentHourTimestamp)}")
+
+                            // CRITICAL FIX: Save to database immediately
+                            repository.saveHourlySteps(currentHourTimestamp, stepsClamped)
+
+                            // Verify save
+                            val saved = repository.getStepForHour(currentHourTimestamp)
+                            android.util.Log.i("StepCounter", "Early morning: Verified DB has ${saved?.stepCount ?: 0} steps for current hour")
                         } else {
                             // Later in day: distribute steps evenly across waking hours (threshold onwards)
                             val hoursAwake = currentHour - StepTrackerConfig.MORNING_THRESHOLD_HOUR
@@ -189,6 +196,9 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                                     set(Calendar.MILLISECOND, 0)
                                 }
 
+                                // Track which hours we're saving to prevent WorkManager conflicts
+                                val distributedHours = mutableListOf<Long>()
+
                                 for (hour in 0 until hoursAwake) {
                                     // Create fresh calendar for each hour to avoid accumulation
                                     val hourCalendar = Calendar.getInstance().apply {
@@ -200,12 +210,41 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                                     val hourTimestamp = hourCalendar.timeInMillis
 
                                     val stepsClamped = minOf(stepsPerHour, StepTrackerConfig.MAX_STEPS_PER_HOUR)
-                                    android.util.Log.d("StepCounter", "Distributing: hour ${StepTrackerConfig.MORNING_THRESHOLD_HOUR + hour} ← $stepsClamped steps")
+                                    android.util.Log.i("StepCounter", "CLOSURE DISTRIBUTION: Saving hour ${StepTrackerConfig.MORNING_THRESHOLD_HOUR + hour}:00 (${java.util.Date(hourTimestamp)}) ← $stepsClamped steps [STARTING]")
+
+                                    // CRITICAL FIX: Save synchronously within this coroutine scope (already inside launch from line 80)
                                     repository.saveHourlySteps(hourTimestamp, stepsClamped)
+                                    distributedHours.add(hourTimestamp)
+
+                                    android.util.Log.i("StepCounter", "CLOSURE DISTRIBUTION: Hour ${StepTrackerConfig.MORNING_THRESHOLD_HOUR + hour}:00 ← $stepsClamped steps [COMMITTED]")
+                                }
+
+                                // CRITICAL FIX: Verify all saves committed
+                                android.util.Log.i("StepCounter", "CLOSURE DISTRIBUTION COMPLETE: Verifying ${distributedHours.size} hours...")
+                                for ((index, hourTs) in distributedHours.withIndex()) {
+                                    val saved = repository.getStepForHour(hourTs)
+                                    val hourNum = StepTrackerConfig.MORNING_THRESHOLD_HOUR + index
+                                    android.util.Log.i("StepCounter", "  ✓ Hour $hourNum:00 → DB has ${saved?.stepCount ?: 0} steps")
                                 }
                             }
                         }
                     }
+
+                    // CRITICAL FIX: Update current hour baseline after distribution
+                    // This ensures subsequent sensor readings calculate correctly
+                    android.util.Log.i("StepCounter", "Post-distribution: Setting current hour baseline to $actualDeviceSteps")
+                    preferences.saveHourData(
+                        hourStartStepCount = actualDeviceSteps,
+                        currentTimestamp = currentHourTimestamp,
+                        totalSteps = actualDeviceSteps
+                    )
+                    sensorManager.setLastHourStartStepCount(actualDeviceSteps)
+                    sensorManager.setLastKnownStepCount(actualDeviceSteps)
+                    sensorManager.markInitialized()
+
+                    // Record distribution time for WorkManager coordination
+                    preferences.saveLastDistributionTime(System.currentTimeMillis())
+                    android.util.Log.i("StepCounter", "Closure distribution timestamp recorded")
 
                     // Update last open date
                     preferences.saveLastOpenDate(currentStartOfDay)

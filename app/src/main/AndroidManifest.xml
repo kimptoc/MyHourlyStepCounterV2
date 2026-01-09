@@ -4,10 +4,15 @@
 
     <!-- Permissions for step sensor access -->
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <!-- Notification permission (Android 13+) - still requires runtime grant -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- Permissions for WorkManager background work -->
+    <!-- Permissions for WorkManager and foreground service -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:allowBackup="true"
@@ -29,6 +34,22 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Foreground service for permanent step counter notification -->
+        <service
+            android:name=".services.StepCounterForegroundService"
+            android:foregroundServiceType="health"
+            android:exported="false" />
+
+        <!-- Receiver to (re)start service on boot if enabled -->
+        <receiver
+            android:name=".receivers.BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>
