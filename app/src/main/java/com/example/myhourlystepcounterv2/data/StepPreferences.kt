@@ -23,9 +23,14 @@ class StepPreferences(private val context: Context) {
         val PERMANENT_NOTIFICATION_ENABLED = booleanPreferencesKey("permanent_notification_enabled")
         val USE_WAKE_LOCK = booleanPreferencesKey("use_wake_lock")
 
+        // Reminder notification preferences
+        val REMINDER_NOTIFICATION_ENABLED = booleanPreferencesKey("reminder_notification_enabled")
+        val LAST_REMINDER_NOTIFICATION_TIME = longPreferencesKey("last_reminder_notification_time")
+
         // Defaults (user requested defaults ON)
         const val PERMANENT_NOTIFICATION_DEFAULT = true
         const val USE_WAKE_LOCK_DEFAULT = true
+        const val REMINDER_NOTIFICATION_DEFAULT = true
     }
 
     val hourStartStepCount: Flow<Int> = context.dataStore.data
@@ -52,6 +57,12 @@ class StepPreferences(private val context: Context) {
 
     val useWakeLock: Flow<Boolean> = context.dataStore.data
         .map { preferences -> preferences[USE_WAKE_LOCK] ?: USE_WAKE_LOCK_DEFAULT }
+
+    val reminderNotificationEnabled: Flow<Boolean> = context.dataStore.data
+        .map { preferences -> preferences[REMINDER_NOTIFICATION_ENABLED] ?: REMINDER_NOTIFICATION_DEFAULT }
+
+    val lastReminderNotificationTime: Flow<Long> = context.dataStore.data
+        .map { preferences -> preferences[LAST_REMINDER_NOTIFICATION_TIME] ?: 0L }
 
     suspend fun savePermanentNotificationEnabled(enabled: Boolean) {
         context.dataStore.updateData { preferences ->
@@ -123,6 +134,22 @@ class StepPreferences(private val context: Context) {
         context.dataStore.updateData { preferences ->
             preferences.toMutablePreferences().apply {
                 this[LAST_DISTRIBUTION_TIME] = timestamp
+            }
+        }
+    }
+
+    suspend fun saveReminderNotificationEnabled(enabled: Boolean) {
+        context.dataStore.updateData { preferences ->
+            preferences.toMutablePreferences().apply {
+                this[REMINDER_NOTIFICATION_ENABLED] = enabled
+            }
+        }
+    }
+
+    suspend fun saveLastReminderNotificationTime(timestamp: Long) {
+        context.dataStore.updateData { preferences ->
+            preferences.toMutablePreferences().apply {
+                this[LAST_REMINDER_NOTIFICATION_TIME] = timestamp
             }
         }
     }

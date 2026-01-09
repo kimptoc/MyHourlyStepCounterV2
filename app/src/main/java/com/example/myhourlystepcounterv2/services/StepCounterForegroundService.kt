@@ -22,13 +22,14 @@ import com.example.myhourlystepcounterv2.data.StepPreferences
 
 class StepCounterForegroundService : android.app.Service() {
     companion object {
-        const val CHANNEL_ID = "step_counter_channel_v2"
+        const val CHANNEL_ID = "step_counter_channel_v3"
         const val NOTIFICATION_ID = 42
         const val ACTION_STOP = "com.example.myhourlystepcounterv2.ACTION_STOP_FOREGROUND"
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private lateinit var sensorManager: com.example.myhourlystepcounterv2.sensor.StepSensorManager
 
     override fun onCreate() {
         super.onCreate()
@@ -37,6 +38,31 @@ class StepCounterForegroundService : android.app.Service() {
         val preferences = StepPreferences(applicationContext)
         val database = com.example.myhourlystepcounterv2.data.StepDatabase.getDatabase(applicationContext)
         val repository = com.example.myhourlystepcounterv2.data.StepRepository(database.stepDao())
+
+        // Initialize sensor manager for real-time step data
+        sensorManager = com.example.myhourlystepcounterv2.sensor.StepSensorManager(applicationContext)
+
+        // Check permission before starting sensor
+        val hasPermission = com.example.myhourlystepcounterv2.PermissionHelper.hasActivityRecognitionPermission(applicationContext)
+        if (hasPermission) {
+            // Get baseline from preferences to initialize sensor
+            scope.launch {
+                val hourStart = preferences.hourStartStepCount.first()
+                val totalSteps = preferences.totalStepsDevice.first()
+
+                android.util.Log.d("StepCounterFGSvc", "Initializing sensor with hourStart=$hourStart, totalSteps=$totalSteps")
+
+                // Initialize sensor with current values
+                sensorManager.setLastHourStartStepCount(hourStart)
+                sensorManager.setLastKnownStepCount(totalSteps)
+                sensorManager.markInitialized()
+                sensorManager.startListening()
+
+                android.util.Log.d("StepCounterFGSvc", "Sensor started and initialized for real-time notification updates")
+            }
+        } else {
+            android.util.Log.w("StepCounterFGSvc", "ACTIVITY_RECOGNITION permission denied - notification will show 0 steps")
+        }
 
         // Start foreground immediately with a placeholder notification
         try {
@@ -52,11 +78,12 @@ class StepCounterForegroundService : android.app.Service() {
         // Observe flows and update notification / wake-lock accordingly
         scope.launch {
             combine(
-                preferences.totalStepsDevice,
-                preferences.hourStartStepCount,
+                sensorManager.currentStepCount,
                 preferences.currentHourTimestamp,
                 preferences.useWakeLock
-            ) { totalSteps, hourStart, currentHourTimestamp, useWake ->
+            ) { currentHourSteps, currentHourTimestamp, useWake ->
+                android.util.Log.d("StepCounterFGSvc", "Live sensor: currentHourSteps=$currentHourSteps")
+
                 // Calculate start of day
                 val startOfDay = java.util.Calendar.getInstance().apply {
                     set(java.util.Calendar.HOUR_OF_DAY, 0)
@@ -67,11 +94,13 @@ class StepCounterForegroundService : android.app.Service() {
 
                 // Get daily total from database (excluding current hour)
                 val dbTotal = repository.getTotalStepsForDayExcludingCurrentHour(startOfDay, currentHourTimestamp).first() ?: 0
-                val currentHourSteps = (totalSteps - hourStart).coerceAtLeast(0)
                 val dailyTotal = dbTotal + currentHourSteps
 
+                android.util.Log.d("StepCounterFGSvc", "Calculated: dbTotal=$dbTotal, currentHour=$currentHourSteps, daily=$dailyTotal")
                 Triple(currentHourSteps, dailyTotal, useWake)
             }.collect { (currentHourSteps, dailyTotal, useWake) ->
+                android.util.Log.d("StepCounterFGSvc", "Notification update: currentHour=$currentHourSteps, daily=$dailyTotal")
+
                 // Update notification with correct daily total
                 val notification = buildNotification(currentHourSteps, dailyTotal)
                 val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -119,6 +148,8 @@ class StepCounterForegroundService : android.app.Service() {
             .addAction(0, getString(R.string.notification_action_stop), stopPending)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
             .build()
     }
 
@@ -131,6 +162,8 @@ class StepCounterForegroundService : android.app.Service() {
                 description = descriptionText
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
                 setShowBadge(false)
+                enableVibration(false)
+                setSound(null, null)
             }
             val notificationManager: NotificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.createNotificationChannel(channel)
@@ -164,6 +197,7 @@ class StepCounterForegroundService : android.app.Service() {
     override fun onDestroy() {
         super.onDestroy()
         handleWakeLock(false)
+        sensorManager.stopListening()
         scope.cancel()
     }
 }

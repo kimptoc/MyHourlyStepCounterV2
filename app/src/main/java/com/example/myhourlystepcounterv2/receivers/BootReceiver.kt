@@ -25,6 +25,15 @@ class BootReceiver : BroadcastReceiver() {
                         // Best-effort: ignore if the system prevents starting a service here
                         android.util.Log.w("BootReceiver", "Failed to start foreground service on boot: ${e.message}")
                     }
+
+                    // Also schedule step reminders if enabled
+                    val reminderEnabled = prefs.reminderNotificationEnabled.first()
+                    if (reminderEnabled) {
+                        com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleStepReminders(
+                            context.applicationContext
+                        )
+                        android.util.Log.d("BootReceiver", "Step reminders scheduled on boot")
+                    }
                 }
             }
         }

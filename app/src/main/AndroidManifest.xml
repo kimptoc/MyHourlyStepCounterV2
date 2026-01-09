@@ -50,6 +50,15 @@
                 <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <!-- Receiver for step reminder alarms -->
+        <receiver
+            android:name=".notifications.StepReminderReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.myhourlystepcounterv2.ACTION_STEP_REMINDER" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

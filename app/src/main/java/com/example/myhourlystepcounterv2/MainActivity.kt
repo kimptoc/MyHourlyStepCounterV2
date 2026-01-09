@@ -65,6 +65,23 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+        // Schedule step reminder alarms
+        lifecycleScope.launch {
+            preferences.reminderNotificationEnabled.collect { enabled ->
+                if (enabled) {
+                    com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleStepReminders(
+                        applicationContext
+                    )
+                    android.util.Log.d("MainActivity", "Step reminders scheduled")
+                } else {
+                    com.example.myhourlystepcounterv2.notifications.AlarmScheduler.cancelStepReminders(
+                        applicationContext
+                    )
+                    android.util.Log.d("MainActivity", "Step reminders cancelled")
+                }
+            }
+        }
     }
 
     override fun onResume() {

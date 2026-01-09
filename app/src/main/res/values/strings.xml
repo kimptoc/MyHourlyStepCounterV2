@@ -7,4 +7,10 @@
     <string name="notification_title">%1$s</string>
     <string name="notification_text_steps">This hour: %1$d — Today: %2$d</string>
     <string name="notification_action_stop">Stop</string>
+
+    <!-- Reminder notification strings -->
+    <string name="reminder_channel_name">Step Reminder</string>
+    <string name="reminder_channel_description">Reminds you to move when you have less than 250 steps before the hour ends</string>
+    <string name="reminder_notification_title">Time to move!</string>
+    <string name="reminder_notification_text">Only %1$d steps this hour. Get moving to reach %2$d steps before the hour ends!</string>
 </resources>

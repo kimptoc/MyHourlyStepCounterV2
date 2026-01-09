@@ -24,6 +24,15 @@ object StepTrackerConfig {
     const val MAX_STEPS_PER_HOUR = 10000
 
     /**
+     * Minimum step threshold for hourly step reminders.
+     * User will receive a notification at :50 of each hour if below this threshold.
+     * Reminds user to move before the hour ends.
+     *
+     * Value: 250 steps/hour
+     */
+    const val STEP_REMINDER_THRESHOLD = 250
+
+    /**
      * String representations for display
      */
     const val MORNING_THRESHOLD_DISPLAY = "10:00 AM"
