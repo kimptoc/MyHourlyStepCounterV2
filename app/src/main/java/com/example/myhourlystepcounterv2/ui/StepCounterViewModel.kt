@@ -62,7 +62,7 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
         }
         android.util.Log.d("StepCounter", "initialize() starting...")
 
-        sensorManager = StepSensorManager(context)
+        sensorManager = StepSensorManager.getInstance(context)
         preferences = StepPreferences(context)
 
         // Check permission before registering sensor listener
@@ -616,7 +616,8 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
 
     override fun onCleared() {
         super.onCleared()
-        sensorManager.stopListening()
+        // Don't stop the singleton sensor - ForegroundService may still be using it
+        // System will clean up when app process is killed
     }
 
     private fun getStartOfDay(): Long {

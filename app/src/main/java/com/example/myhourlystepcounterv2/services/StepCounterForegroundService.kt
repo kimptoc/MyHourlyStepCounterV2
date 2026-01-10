@@ -39,30 +39,9 @@ class StepCounterForegroundService : android.app.Service() {
         val database = com.example.myhourlystepcounterv2.data.StepDatabase.getDatabase(applicationContext)
         val repository = com.example.myhourlystepcounterv2.data.StepRepository(database.stepDao())
 
-        // Initialize sensor manager for real-time step data
-        sensorManager = com.example.myhourlystepcounterv2.sensor.StepSensorManager(applicationContext)
-
-        // Check permission before starting sensor
-        val hasPermission = com.example.myhourlystepcounterv2.PermissionHelper.hasActivityRecognitionPermission(applicationContext)
-        if (hasPermission) {
-            // Get baseline from preferences to initialize sensor
-            scope.launch {
-                val hourStart = preferences.hourStartStepCount.first()
-                val totalSteps = preferences.totalStepsDevice.first()
-
-                android.util.Log.d("StepCounterFGSvc", "Initializing sensor with hourStart=$hourStart, totalSteps=$totalSteps")
-
-                // Initialize sensor with current values
-                sensorManager.setLastHourStartStepCount(hourStart)
-                sensorManager.setLastKnownStepCount(totalSteps)
-                sensorManager.markInitialized()
-                sensorManager.startListening()
-
-                android.util.Log.d("StepCounterFGSvc", "Sensor started and initialized for real-time notification updates")
-            }
-        } else {
-            android.util.Log.w("StepCounterFGSvc", "ACTIVITY_RECOGNITION permission denied - notification will show 0 steps")
-        }
+        // Get singleton sensor manager (already initialized by ViewModel)
+        sensorManager = com.example.myhourlystepcounterv2.sensor.StepSensorManager.getInstance(applicationContext)
+        android.util.Log.d("StepCounterFGSvc", "Using shared singleton StepSensorManager for real-time notification updates")
 
         // Start foreground immediately with a placeholder notification
         try {
@@ -197,7 +176,7 @@ class StepCounterForegroundService : android.app.Service() {
     override fun onDestroy() {
         super.onDestroy()
         handleWakeLock(false)
-        sensorManager.stopListening()
+        // Don't stop the singleton sensor - ViewModel may still be using it
         scope.cancel()
     }
 }

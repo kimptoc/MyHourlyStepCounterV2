@@ -92,12 +92,12 @@ class StepCounterWorker(
 
                 // Try to read sensor with longer timeout for background context
                 if (stepSensor != null && hasPermission) {
-                    val sensorHelper = com.example.myhourlystepcounterv2.sensor.StepSensorManager(applicationContext)
-                    sensorHelper.startListening()
+                    val sensorHelper = com.example.myhourlystepcounterv2.sensor.StepSensorManager.getInstance(applicationContext)
 
-                    android.util.Log.d("StepCounterWorker", "DIAGNOSTIC: Started sensor listener, waiting for data...")
+                    android.util.Log.d("StepCounterWorker", "DIAGNOSTIC: Reading from singleton sensor manager...")
 
-                    // Wait up to 2000ms for sensor to fire (longer timeout for background)
+                    // Read from singleton (should already be listening if app is alive)
+                    // Wait up to 2000ms for sensor to have valid data (longer timeout for background)
                     for (i in 0 until 20) {
                         val sensorValue = sensorHelper.getCurrentTotalSteps()
                         android.util.Log.d(
@@ -112,7 +112,7 @@ class StepCounterWorker(
                         }
                         Thread.sleep(100)
                     }
-                    sensorHelper.stopListening()
+                    // Don't stop listening - singleton is shared with other components
 
                     if (!sensorReadSuccessful) {
                         android.util.Log.w(

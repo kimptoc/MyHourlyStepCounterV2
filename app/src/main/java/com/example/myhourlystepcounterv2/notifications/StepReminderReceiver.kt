@@ -44,22 +44,11 @@ class StepReminderReceiver : BroadcastReceiver() {
                     return@launch
                 }
 
-                // Get current hourly step count from sensor
-                val sensorManager = StepSensorManager(context.applicationContext)
+                // Get current hourly step count from shared singleton sensor
+                val sensorManager = StepSensorManager.getInstance(context.applicationContext)
 
-                // Initialize sensor with current preferences
-                val hourStart = preferences.hourStartStepCount.first()
-                val totalSteps = preferences.totalStepsDevice.first()
-
-                sensorManager.setLastHourStartStepCount(hourStart)
-                sensorManager.setLastKnownStepCount(totalSteps)
-                sensorManager.markInitialized()
-                sensorManager.startListening()
-
-                // Wait briefly for sensor to fire (if needed)
-                kotlinx.coroutines.delay(500)
+                // Read current step count from singleton (already initialized by ViewModel)
                 val currentHourSteps = sensorManager.currentStepCount.first()
-                sensorManager.stopListening()
 
                 android.util.Log.d(
                     "StepReminder",

@@ -9,8 +9,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-class StepSensorManager(context: Context) : SensorEventListener {
-    private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+class StepSensorManager private constructor(context: Context) : SensorEventListener {
+    private val sensorManager = context.applicationContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val stepSensor = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
 
     private val _currentStepCount = MutableStateFlow(0)
@@ -20,6 +20,20 @@ class StepSensorManager(context: Context) : SensorEventListener {
     private var lastHourStartStepCount = 0
     private var isInitialized = false
     private var previousSensorValue = 0  // Track previous value to detect resets
+
+    companion object {
+        @Volatile
+        private var INSTANCE: StepSensorManager? = null
+
+        fun getInstance(context: Context): StepSensorManager {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: StepSensorManager(context.applicationContext).also {
+                    INSTANCE = it
+                    android.util.Log.i("StepSensor", "Singleton instance created")
+                }
+            }
+        }
+    }
 
     fun startListening() {
         stepSensor?.let {
