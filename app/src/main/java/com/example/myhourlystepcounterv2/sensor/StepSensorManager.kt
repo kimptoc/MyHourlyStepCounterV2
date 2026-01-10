@@ -117,6 +117,31 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
         lastHourStartStepCount = currentStepCount
         previousSensorValue = currentStepCount  // Update tracking for reset detection
         _currentStepCount.value = 0
+        android.util.Log.i("StepSensor", "resetForNewHour: Baseline set to $currentStepCount, display reset to 0")
+    }
+
+    /**
+     * Update hour baseline only if it's different from current baseline.
+     * Used by WorkManager which may run delayed - don't reset display if we're mid-hour.
+     * Returns true if baseline was updated (meaning hour actually changed).
+     */
+    fun updateHourBaselineIfNeeded(newBaseline: Int): Boolean {
+        if (lastHourStartStepCount != newBaseline) {
+            android.util.Log.i(
+                "StepSensor",
+                "updateHourBaselineIfNeeded: Baseline changed from $lastHourStartStepCount to $newBaseline. " +
+                "Resetting display to 0 for new hour."
+            )
+            resetForNewHour(newBaseline)
+            return true
+        } else {
+            android.util.Log.d(
+                "StepSensor",
+                "updateHourBaselineIfNeeded: Baseline already $newBaseline, skipping reset. " +
+                "Current hour steps: ${_currentStepCount.value} (preserved)"
+            )
+            return false
+        }
     }
 
     fun getCurrentTotalSteps(): Int = lastKnownStepCount

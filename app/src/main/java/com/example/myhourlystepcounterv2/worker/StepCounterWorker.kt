@@ -285,6 +285,22 @@ class StepCounterWorker(
                 totalSteps = currentDeviceSteps
             )
 
+            // CRITICAL: Update singleton StepSensorManager baseline for new hour
+            // Only resets display if baseline actually changed (prevents intra-hour resets from delayed WorkManager)
+            val sensorManager = com.example.myhourlystepcounterv2.sensor.StepSensorManager.getInstance(applicationContext)
+            val wasReset = sensorManager.updateHourBaselineIfNeeded(currentDeviceSteps)
+            if (wasReset) {
+                android.util.Log.i(
+                    "StepCounterWorker",
+                    "✓ RESET SINGLETON SENSOR for new hour with baseline=$currentDeviceSteps"
+                )
+            } else {
+                android.util.Log.i(
+                    "StepCounterWorker",
+                    "✓ SINGLETON SENSOR baseline already correct ($currentDeviceSteps), preserved current hour steps"
+                )
+            }
+
             val nextHourTime = java.text.SimpleDateFormat(
                 "yyyy-MM-dd HH:mm:ss",
                 java.util.Locale.getDefault()
