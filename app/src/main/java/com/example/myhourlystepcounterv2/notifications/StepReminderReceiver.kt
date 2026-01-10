@@ -44,6 +44,9 @@ class StepReminderReceiver : BroadcastReceiver() {
                     return@launch
                 }
 
+                // Reset achievement tracking for new hour
+                preferences.saveAchievementSentThisHour(false)
+
                 // Get current hourly step count from shared singleton sensor
                 val sensorManager = StepSensorManager.getInstance(context.applicationContext)
 
@@ -62,8 +65,9 @@ class StepReminderReceiver : BroadcastReceiver() {
                         currentHourSteps
                     )
 
-                    // Record notification time
+                    // Record notification time and state
                     preferences.saveLastReminderNotificationTime(System.currentTimeMillis())
+                    preferences.saveReminderSentThisHour(true)
 
                     android.util.Log.i(
                         "StepReminder",

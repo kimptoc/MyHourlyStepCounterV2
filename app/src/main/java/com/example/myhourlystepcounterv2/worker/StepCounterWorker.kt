@@ -278,38 +278,39 @@ class StepCounterWorker(
                 )
             }
 
-            // Update preferences for the new hour that's starting
-            preferences.saveHourData(
-                hourStartStepCount = currentDeviceSteps,
-                currentTimestamp = currentHourTimestamp,
-                totalSteps = currentDeviceSteps
-            )
+            // Check if preferences already have a baseline for this hour (from ViewModel running at hour boundary)
+            val existingHourStart = preferences.hourStartStepCount.first()
+            val existingHourTimestamp = preferences.currentHourTimestamp.first()
 
-            // CRITICAL: Update singleton StepSensorManager baseline for new hour
-            // Only resets display if baseline actually changed (prevents intra-hour resets from delayed WorkManager)
-            val sensorManager = com.example.myhourlystepcounterv2.sensor.StepSensorManager.getInstance(applicationContext)
-            val wasReset = sensorManager.updateHourBaselineIfNeeded(currentDeviceSteps)
-            if (wasReset) {
+            // Only update preferences if we're moving to a different hour OR baseline not yet set
+            if (existingHourTimestamp != currentHourTimestamp || existingHourStart == 0) {
+                // This is truly a new hour, update preferences
+                preferences.saveHourData(
+                    hourStartStepCount = currentDeviceSteps,
+                    currentTimestamp = currentHourTimestamp,
+                    totalSteps = currentDeviceSteps
+                )
+
                 android.util.Log.i(
                     "StepCounterWorker",
-                    "✓ RESET SINGLETON SENSOR for new hour with baseline=$currentDeviceSteps"
+                    "✓ UPDATED PREFERENCES for new hour: baseline=$currentDeviceSteps"
                 )
+
+                // Update singleton to match
+                val sensorManager = com.example.myhourlystepcounterv2.sensor.StepSensorManager.getInstance(applicationContext)
+                sensorManager.updateHourBaselineIfNeeded(currentDeviceSteps)
             } else {
+                // ViewModel already set correct baseline for this hour, don't overwrite!
                 android.util.Log.i(
                     "StepCounterWorker",
-                    "✓ SINGLETON SENSOR baseline already correct ($currentDeviceSteps), preserved current hour steps"
+                    "✓ PRESERVED EXISTING BASELINE: Preferences already have baseline=$existingHourStart for current hour. " +
+                    "Not overwriting with WorkManager's value ($currentDeviceSteps) to preserve mid-hour progress."
                 )
+
+                // Still update singleton to match preferences (in case app was restarted)
+                val sensorManager = com.example.myhourlystepcounterv2.sensor.StepSensorManager.getInstance(applicationContext)
+                sensorManager.updateHourBaselineIfNeeded(existingHourStart)
             }
-
-            val nextHourTime = java.text.SimpleDateFormat(
-                "yyyy-MM-dd HH:mm:ss",
-                java.util.Locale.getDefault()
-            ).format(java.util.Date(currentHourTimestamp))
-
-            android.util.Log.i(
-                "StepCounterWorker",
-                "✓ INITIALIZED NEXT HOUR: $nextHourTime with baseline=$currentDeviceSteps"
-            )
 
             Result.success()
         } catch (e: Exception) {

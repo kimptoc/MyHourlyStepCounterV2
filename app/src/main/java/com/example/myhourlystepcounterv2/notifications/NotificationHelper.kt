@@ -14,6 +14,7 @@ import com.example.myhourlystepcounterv2.StepTrackerConfig
 object NotificationHelper {
     private const val CHANNEL_ID = "step_reminder_channel"
     private const val NOTIFICATION_ID = 100
+    private const val ACHIEVEMENT_NOTIFICATION_ID = 101
 
     fun sendStepReminderNotification(context: Context, currentSteps: Int) {
         createReminderNotificationChannel(context)
@@ -48,6 +49,40 @@ object NotificationHelper {
 
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(NOTIFICATION_ID, notification)
+    }
+
+    fun sendStepAchievementNotification(context: Context, currentSteps: Int) {
+        createReminderNotificationChannel(context)
+
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            1,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(context.getString(R.string.achievement_notification_title))
+            .setContentText(
+                context.getString(
+                    R.string.achievement_notification_text,
+                    currentSteps
+                )
+            )
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setVibrate(longArrayOf(0, 200, 100, 200, 100))
+            .build()
+
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(ACHIEVEMENT_NOTIFICATION_ID, notification)
     }
 
     private fun createReminderNotificationChannel(context: Context) {

@@ -26,6 +26,8 @@ class StepPreferences(private val context: Context) {
         // Reminder notification preferences
         val REMINDER_NOTIFICATION_ENABLED = booleanPreferencesKey("reminder_notification_enabled")
         val LAST_REMINDER_NOTIFICATION_TIME = longPreferencesKey("last_reminder_notification_time")
+        val REMINDER_SENT_THIS_HOUR = booleanPreferencesKey("reminder_sent_this_hour")
+        val ACHIEVEMENT_SENT_THIS_HOUR = booleanPreferencesKey("achievement_sent_this_hour")
 
         // Defaults (user requested defaults ON)
         const val PERMANENT_NOTIFICATION_DEFAULT = true
@@ -63,6 +65,12 @@ class StepPreferences(private val context: Context) {
 
     val lastReminderNotificationTime: Flow<Long> = context.dataStore.data
         .map { preferences -> preferences[LAST_REMINDER_NOTIFICATION_TIME] ?: 0L }
+
+    val reminderSentThisHour: Flow<Boolean> = context.dataStore.data
+        .map { preferences -> preferences[REMINDER_SENT_THIS_HOUR] ?: false }
+
+    val achievementSentThisHour: Flow<Boolean> = context.dataStore.data
+        .map { preferences -> preferences[ACHIEVEMENT_SENT_THIS_HOUR] ?: false }
 
     suspend fun savePermanentNotificationEnabled(enabled: Boolean) {
         context.dataStore.updateData { preferences ->
@@ -150,6 +158,22 @@ class StepPreferences(private val context: Context) {
         context.dataStore.updateData { preferences ->
             preferences.toMutablePreferences().apply {
                 this[LAST_REMINDER_NOTIFICATION_TIME] = timestamp
+            }
+        }
+    }
+
+    suspend fun saveReminderSentThisHour(sent: Boolean) {
+        context.dataStore.updateData { preferences ->
+            preferences.toMutablePreferences().apply {
+                this[REMINDER_SENT_THIS_HOUR] = sent
+            }
+        }
+    }
+
+    suspend fun saveAchievementSentThisHour(sent: Boolean) {
+        context.dataStore.updateData { preferences ->
+            preferences.toMutablePreferences().apply {
+                this[ACHIEVEMENT_SENT_THIS_HOUR] = sent
             }
         }
     }
