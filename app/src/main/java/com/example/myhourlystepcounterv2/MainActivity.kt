@@ -82,6 +82,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+        // Schedule hour boundary alarms (always enabled for notification resets)
+        com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleHourBoundaryAlarms(
+            applicationContext
+        )
+        android.util.Log.d("MainActivity", "Hour boundary alarms scheduled")
     }
 
     override fun onResume() {

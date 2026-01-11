@@ -34,6 +34,12 @@ class BootReceiver : BroadcastReceiver() {
                         )
                         android.util.Log.d("BootReceiver", "Step reminders scheduled on boot")
                     }
+
+                    // Always schedule hour boundary alarms for notification resets
+                    com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleHourBoundaryAlarms(
+                        context.applicationContext
+                    )
+                    android.util.Log.d("BootReceiver", "Hour boundary alarms scheduled on boot")
                 }
             }
         }
