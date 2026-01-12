@@ -26,8 +26,8 @@ enum class AppDestinations(
     val label: String,
     val icon: ImageVector,
 ) {
-    HOME("Home", Icons.Filled.Home),
     HISTORY("History", Icons.AutoMirrored.Filled.List),
+    HOME("Home", Icons.Filled.Home),
     PROFILE("Profile", Icons.Filled.AccountBox),
 }
 

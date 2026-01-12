@@ -108,14 +108,14 @@ class StepCounterForegroundService : android.app.Service() {
         val title = getString(R.string.app_name)
         val text = getString(R.string.notification_text_steps, currentHourSteps, totalSteps)
 
-        val stopIntent = Intent(this, StepCounterForegroundService::class.java).apply {
-            action = ACTION_STOP
+        val openAppIntent = Intent(this, com.example.myhourlystepcounterv2.MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
 
-        val stopPending = PendingIntent.getService(
+        val openAppPending = PendingIntent.getActivity(
             this,
             0,
-            stopIntent,
+            openAppIntent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
@@ -124,7 +124,7 @@ class StepCounterForegroundService : android.app.Service() {
             .setContentTitle(title)
             .setContentText(text)
             .setOngoing(true)
-            .addAction(0, getString(R.string.notification_action_stop), stopPending)
+            .setContentIntent(openAppPending)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOnlyAlertOnce(true)
