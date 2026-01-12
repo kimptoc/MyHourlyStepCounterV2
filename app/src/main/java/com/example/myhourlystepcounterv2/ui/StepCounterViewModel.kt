@@ -325,8 +325,22 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
         viewModelScope.launch {
             sensorManager.currentStepCount.collect { steps ->
                 _hourlySteps.value = steps
-                // Save current device steps to preferences
-                preferences.saveTotalStepsDevice(sensorManager.getCurrentTotalSteps())
+
+                // Save current device steps to preferences with monotonic check
+                val newDeviceTotal = sensorManager.getCurrentTotalSteps()
+                val previousDeviceTotal = preferences.totalStepsDevice.first()
+
+                // Only save if value increased or stayed same (monotonic check)
+                // This prevents sensor resets from corrupting the cached baseline
+                if (newDeviceTotal >= previousDeviceTotal) {
+                    preferences.saveTotalStepsDevice(newDeviceTotal)
+                } else {
+                    android.util.Log.w(
+                        "StepCounter",
+                        "⚠️ BLOCKED preferences save: Device total decreased from $previousDeviceTotal to $newDeviceTotal. " +
+                                "Sensor reset in progress - keeping previous cached value."
+                    )
+                }
             }
         }
 
@@ -591,16 +605,32 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
     /**
      * Refresh step counts when app resumes (e.g., from another fitness app like Samsung Health).
      * This ensures the sensor is responsive and displays are up-to-date.
+     *
+     * Defensive: Only refresh if sensor value increased or stayed same (never on decrease).
+     * This prevents propagating stale values during mid-reset timing.
      */
     fun refreshStepCounts() {
         viewModelScope.launch {
             // Force recalculation based on current sensor state
             val currentTotal = sensorManager.getCurrentTotalSteps()
+            val previousTotal = preferences.totalStepsDevice.first()
 
             if (currentTotal >= 0) {
+                // Defensive check: Only refresh if sensor value didn't decrease
+                // A decrease indicates we're in the middle of a sensor reset
+                if (currentTotal < previousTotal) {
+                    android.util.Log.w(
+                        "StepCounter",
+                        "⚠️ refreshStepCounts: SKIPPED - Sensor decreased from $previousTotal to $currentTotal. " +
+                                "Likely mid-reset from another app accessing sensor. " +
+                                "Waiting for next sensor event to update naturally."
+                    )
+                    return@launch
+                }
+
                 android.util.Log.d(
                     "StepCounter",
-                    "refreshStepCounts: Current device steps = $currentTotal. " +
+                    "refreshStepCounts: Current device steps = $currentTotal (was $previousTotal). " +
                             "Forcing sensor manager to recalculate hourly delta."
                 )
 

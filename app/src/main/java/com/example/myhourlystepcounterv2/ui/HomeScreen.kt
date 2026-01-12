@@ -11,7 +11,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Star
@@ -59,47 +61,44 @@ fun HomeScreen(
     // Calculate progress for hourly goal (250 steps from StepTrackerConfig)
     val hourlyGoal = StepTrackerConfig.STEP_REMINDER_THRESHOLD
     val progress = (hourlySteps.toFloat() / hourlyGoal).coerceIn(0f, 1f)
+    val scrollState = rememberScrollState()
 
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(24.dp),
+            .verticalScroll(scrollState)
+            .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        // Date and Time Display with Icons
+        // Combined Date and Time Display
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(bottom = 8.dp)
+            modifier = Modifier.padding(bottom = 16.dp)
         ) {
             Icon(
                 imageVector = Icons.Filled.DateRange,
                 contentDescription = "Calendar",
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp)
+                modifier = Modifier.size(16.dp)
             )
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(6.dp))
             Text(
                 text = formattedDate,
-                style = MaterialTheme.typography.headlineSmall,
+                style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center
             )
-        }
-
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(bottom = 32.dp)
-        ) {
+            Spacer(modifier = Modifier.width(12.dp))
             Icon(
                 imageVector = Icons.Filled.Schedule,
                 contentDescription = "Time",
                 tint = MaterialTheme.colorScheme.secondary,
-                modifier = Modifier.size(20.dp)
+                modifier = Modifier.size(16.dp)
             )
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(6.dp))
             Text(
                 text = formattedTime,
-                style = MaterialTheme.typography.titleLarge,
+                style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center
             )
         }
@@ -110,7 +109,7 @@ fun HomeScreen(
                 defaultElevation = 8.dp
             ),
             shape = RoundedCornerShape(24.dp),
-            modifier = Modifier.padding(bottom = 32.dp)
+            modifier = Modifier.padding(bottom = 16.dp)
         ) {
             Box(
                 modifier = Modifier
@@ -122,7 +121,7 @@ fun HomeScreen(
                             )
                         )
                     )
-                    .padding(32.dp),
+                    .padding(20.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Column(
@@ -134,8 +133,8 @@ fun HomeScreen(
                         contentDescription = "Steps",
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier
-                            .size(48.dp)
-                            .padding(bottom = 16.dp)
+                            .size(32.dp)
+                            .padding(bottom = 12.dp)
                     )
 
                     Text(
@@ -143,27 +142,27 @@ fun HomeScreen(
                         style = MaterialTheme.typography.titleMedium,
                         textAlign = TextAlign.Center,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(bottom = 16.dp)
+                        modifier = Modifier.padding(bottom = 12.dp)
                     )
 
                     // Circular Progress Ring with Step Count
                     Box(
                         contentAlignment = Alignment.Center,
-                        modifier = Modifier.size(200.dp)
+                        modifier = Modifier.size(160.dp)
                     ) {
                         // Background circle
                         CircularProgressIndicator(
                             progress = { 1f },
-                            modifier = Modifier.size(200.dp),
+                            modifier = Modifier.size(160.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant,
-                            strokeWidth = 12.dp,
+                            strokeWidth = 10.dp,
                         )
                         // Progress circle
                         CircularProgressIndicator(
                             progress = { progress },
-                            modifier = Modifier.size(200.dp),
+                            modifier = Modifier.size(160.dp),
                             color = MaterialTheme.colorScheme.primary,
-                            strokeWidth = 12.dp,
+                            strokeWidth = 10.dp,
                         )
                         // Step count in center
                         Column(
@@ -172,7 +171,7 @@ fun HomeScreen(
                             Text(
                                 text = hourlySteps.toString(),
                                 style = MaterialTheme.typography.displayLarge.copy(
-                                    fontSize = 64.sp
+                                    fontSize = 48.sp
                                 ),
                                 textAlign = TextAlign.Center,
                                 color = MaterialTheme.colorScheme.primary
@@ -191,7 +190,7 @@ fun HomeScreen(
                         style = MaterialTheme.typography.bodySmall,
                         textAlign = TextAlign.Center,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 16.dp)
+                        modifier = Modifier.padding(top = 12.dp)
                     )
                 }
             }
@@ -205,26 +204,26 @@ fun HomeScreen(
             shape = RoundedCornerShape(16.dp)
         ) {
             Row(
-                modifier = Modifier.padding(20.dp),
+                modifier = Modifier.padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.DirectionsWalk,
                     contentDescription = "Daily Total",
                     tint = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.size(32.dp)
+                    modifier = Modifier.size(28.dp)
                 )
-                Spacer(modifier = Modifier.width(16.dp))
+                Spacer(modifier = Modifier.width(12.dp))
                 Column {
                     Text(
                         text = "Total Steps Today",
-                        style = MaterialTheme.typography.bodyLarge,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = dailySteps.toString(),
-                        style = MaterialTheme.typography.headlineMedium,
+                        style = MaterialTheme.typography.headlineSmall,
                         color = MaterialTheme.colorScheme.secondary
                     )
                 }

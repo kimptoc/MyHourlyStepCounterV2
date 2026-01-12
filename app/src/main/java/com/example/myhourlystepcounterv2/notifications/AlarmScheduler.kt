@@ -12,7 +12,8 @@ object AlarmScheduler {
     private const val REQUEST_CODE_HOUR_BOUNDARY = 1002
 
     /**
-     * Schedule repeating alarms at 50 minutes past each hour (XX:50)
+     * Schedule exact alarm at 50 minutes past the current/next hour (XX:50)
+     * Uses setExactAndAllowWhileIdle for precise timing even during doze mode
      */
     fun scheduleStepReminders(context: Context) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
@@ -56,20 +57,17 @@ object AlarmScheduler {
             set(Calendar.MILLISECOND, 0)
         }
 
-        val intervalMillis = 60 * 60 * 1000L // 1 hour
-
-        // Use setRepeating for repeating alarms (more battery efficient)
-        // Note: On Android 6.0+ this becomes inexact, but should still fire around :50
-        alarmManager.setRepeating(
+        // Use setExactAndAllowWhileIdle for precise timing even during doze mode
+        // Receiver will reschedule the next alarm after execution
+        alarmManager.setExactAndAllowWhileIdle(
             AlarmManager.RTC_WAKEUP,
             calendar.timeInMillis,
-            intervalMillis,
             pendingIntent
         )
 
         android.util.Log.i(
             "AlarmScheduler",
-            "Step reminders scheduled starting at ${calendar.time} (every hour at :50)"
+            "Step reminder scheduled (exact) at ${calendar.time} (:50)"
         )
     }
 
@@ -103,7 +101,8 @@ object AlarmScheduler {
     }
 
     /**
-     * Schedule repeating alarms at the start of each hour (XX:00)
+     * Schedule exact alarm at the start of the current/next hour (XX:00)
+     * Uses setExactAndAllowWhileIdle for precise timing even during doze mode
      * This ensures the notification resets even when the app is backgrounded
      */
     fun scheduleHourBoundaryAlarms(context: Context) {
@@ -148,20 +147,17 @@ object AlarmScheduler {
             set(Calendar.MILLISECOND, 0)
         }
 
-        val intervalMillis = 60 * 60 * 1000L // 1 hour
-
-        // Use setRepeating for repeating alarms (more battery efficient)
-        // Note: On Android 6.0+ this becomes inexact, but should still fire around :00
-        alarmManager.setRepeating(
+        // Use setExactAndAllowWhileIdle for precise timing even during doze mode
+        // Receiver will reschedule the next alarm after execution
+        alarmManager.setExactAndAllowWhileIdle(
             AlarmManager.RTC_WAKEUP,
             calendar.timeInMillis,
-            intervalMillis,
             pendingIntent
         )
 
         android.util.Log.i(
             "AlarmScheduler",
-            "Hour boundary alarms scheduled starting at ${calendar.time} (every hour at :00)"
+            "Hour boundary alarm scheduled (exact) at ${calendar.time} (:00)"
         )
     }
 

@@ -1,13 +1,10 @@
 package com.example.myhourlystepcounterv2.ui
 
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.AccountBox
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.Composable
@@ -61,20 +58,10 @@ fun MyHourlyStepCounterV2App(viewModel: StepCounterViewModel) {
             }
         }
     ) {
-        Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-            when (currentDestination) {
-                AppDestinations.HOME -> HomeScreen(
-                    viewModel = viewModel,
-                    modifier = Modifier.padding(innerPadding)
-                )
-                AppDestinations.HISTORY -> HistoryScreen(
-                    viewModel = viewModel,
-                    modifier = Modifier.padding(innerPadding)
-                )
-                AppDestinations.PROFILE -> ProfileScreen(
-                    modifier = Modifier.padding(innerPadding)
-                )
-            }
+        when (currentDestination) {
+            AppDestinations.HOME -> HomeScreen(viewModel = viewModel)
+            AppDestinations.HISTORY -> HistoryScreen(viewModel = viewModel)
+            AppDestinations.PROFILE -> ProfileScreen()
         }
     }
 }

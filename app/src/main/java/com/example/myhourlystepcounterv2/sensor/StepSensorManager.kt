@@ -62,19 +62,24 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
             val stepCount = event.values[0].toInt()
 
             // Detect significant sensor resets (e.g., when another app like Samsung Health accesses sensor)
-            // Only ignore if drop is significant (more than 10 steps), not just minor fluctuations
+            // Only adjust if drop is significant (more than 10 steps), not just minor fluctuations
             val delta = stepCount - previousSensorValue
             if (previousSensorValue > 0 && delta < -10) {  // Significant drop
+                // Calculate how much the sensor dropped
+                val resetDelta = previousSensorValue - stepCount
+                val oldBaseline = lastHourStartStepCount
+
+                // Adjust the hour baseline DOWN by the same amount to preserve accumulated steps
+                // This maintains the delta: (newSensor - newBaseline) = (oldSensor - oldBaseline)
+                lastHourStartStepCount = maxOf(0, lastHourStartStepCount - resetDelta)
+
                 android.util.Log.w(
                     "StepSensor",
-                    "SENSOR RESET DETECTED: previous=$previousSensorValue, current=$stepCount, delta=$delta. " +
-                            "Another app may have accessed the sensor (e.g., Samsung Health). " +
-                            "Keeping previous value to maintain data integrity."
+                    "🔄 SENSOR RESET DETECTED & ADJUSTED: previous=$previousSensorValue, current=$stepCount, " +
+                            "resetDelta=$resetDelta. Adjusted baseline: $oldBaseline → $lastHourStartStepCount " +
+                            "to preserve accumulated steps. Another app may have accessed the sensor (e.g., Samsung Health)."
                 )
-                // Don't update lastKnownStepCount - keep the previous value
-                // This prevents the display from dropping to zero
-                previousSensorValue = stepCount  // Track the reset for next detection
-                return
+                // Continue processing with adjusted baseline (don't return early)
             }
 
             val stepsThisHour = stepCount - lastHourStartStepCount

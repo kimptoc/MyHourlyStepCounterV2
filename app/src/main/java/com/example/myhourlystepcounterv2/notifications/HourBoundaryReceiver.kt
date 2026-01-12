@@ -74,6 +74,10 @@ class HourBoundaryReceiver : BroadcastReceiver() {
                     "HourBoundary",
                     "✓ Hour boundary processed: Sensor reset to baseline=$deviceTotal, display=0, notification will update"
                 )
+
+                // Reschedule the next alarm (1 hour from now at XX:00)
+                AlarmScheduler.scheduleHourBoundaryAlarms(context.applicationContext)
+                android.util.Log.d("HourBoundary", "Rescheduled next alarm for 1 hour from now")
             } catch (e: Exception) {
                 android.util.Log.e("HourBoundary", "Error processing hour boundary", e)
             } finally {

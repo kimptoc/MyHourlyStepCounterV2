@@ -12,8 +12,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Home
@@ -52,6 +55,7 @@ fun HistoryScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
         Text(
@@ -104,7 +108,7 @@ fun HistoryScreen(
                 SummaryStatCard(
                     title = "Total",
                     value = totalSteps.toString(),
-                    icon = Icons.Filled.Home,
+                    icon = Icons.AutoMirrored.Filled.DirectionsWalk,
                     modifier = Modifier.weight(1f)
                 )
                 SummaryStatCard(

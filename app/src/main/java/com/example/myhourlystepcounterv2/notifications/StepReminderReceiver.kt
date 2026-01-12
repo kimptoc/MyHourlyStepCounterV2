@@ -79,6 +79,10 @@ class StepReminderReceiver : BroadcastReceiver() {
                         "No notification needed: $currentHourSteps steps >= ${StepTrackerConfig.STEP_REMINDER_THRESHOLD}"
                     )
                 }
+
+                // Reschedule the next alarm (1 hour from now at XX:50)
+                AlarmScheduler.scheduleStepReminders(context.applicationContext)
+                android.util.Log.d("StepReminder", "Rescheduled next alarm for 1 hour from now")
             } catch (e: Exception) {
                 android.util.Log.e("StepReminder", "Error in reminder receiver", e)
             } finally {
