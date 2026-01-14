@@ -29,14 +29,12 @@ object AlarmScheduler {
             }
         }
 
-        // Create explicit intent for Android 8.0+ compatibility
-        val intent = Intent(context, StepReminderReceiver::class.java).apply {
-            action = StepReminderReceiver.ACTION_STEP_REMINDER
-            // Make it explicit by setting the component
-            component = android.content.ComponentName(
-                context.packageName,
-                "com.example.myhourlystepcounterv2.notifications.StepReminderReceiver"
-            )
+        // Create action-based intent (implicit broadcast)
+        // Using action only (no explicit component) to avoid duplicate deliveries
+        // when combined with exported="true" and intent-filter in manifest
+        val intent = Intent(StepReminderReceiver.ACTION_STEP_REMINDER).apply {
+            // Set package to ensure it only goes to our app
+            setPackage(context.packageName)
         }
 
         val pendingIntent = PendingIntent.getBroadcast(
@@ -77,13 +75,9 @@ object AlarmScheduler {
     fun cancelStepReminders(context: Context) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
 
-        // Create explicit intent matching the one used for scheduling
-        val intent = Intent(context, StepReminderReceiver::class.java).apply {
-            action = StepReminderReceiver.ACTION_STEP_REMINDER
-            component = android.content.ComponentName(
-                context.packageName,
-                "com.example.myhourlystepcounterv2.notifications.StepReminderReceiver"
-            )
+        // Create intent matching the one used for scheduling
+        val intent = Intent(StepReminderReceiver.ACTION_STEP_REMINDER).apply {
+            setPackage(context.packageName)
         }
 
         val pendingIntent = PendingIntent.getBroadcast(
@@ -119,14 +113,12 @@ object AlarmScheduler {
             }
         }
 
-        // Create explicit intent for Android 8.0+ compatibility
-        val intent = Intent(context, HourBoundaryReceiver::class.java).apply {
-            action = HourBoundaryReceiver.ACTION_HOUR_BOUNDARY
-            // Make it explicit by setting the component
-            component = android.content.ComponentName(
-                context.packageName,
-                "com.example.myhourlystepcounterv2.notifications.HourBoundaryReceiver"
-            )
+        // Create action-based intent (implicit broadcast)
+        // Using action only (no explicit component) to avoid duplicate deliveries
+        // when combined with exported="true" and intent-filter in manifest
+        val intent = Intent(HourBoundaryReceiver.ACTION_HOUR_BOUNDARY).apply {
+            // Set package to ensure it only goes to our app
+            setPackage(context.packageName)
         }
 
         val pendingIntent = PendingIntent.getBroadcast(
@@ -167,13 +159,9 @@ object AlarmScheduler {
     fun cancelHourBoundaryAlarms(context: Context) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
 
-        // Create explicit intent matching the one used for scheduling
-        val intent = Intent(context, HourBoundaryReceiver::class.java).apply {
-            action = HourBoundaryReceiver.ACTION_HOUR_BOUNDARY
-            component = android.content.ComponentName(
-                context.packageName,
-                "com.example.myhourlystepcounterv2.notifications.HourBoundaryReceiver"
-            )
+        // Create intent matching the one used for scheduling
+        val intent = Intent(HourBoundaryReceiver.ACTION_HOUR_BOUNDARY).apply {
+            setPackage(context.packageName)
         }
 
         val pendingIntent = PendingIntent.getBroadcast(

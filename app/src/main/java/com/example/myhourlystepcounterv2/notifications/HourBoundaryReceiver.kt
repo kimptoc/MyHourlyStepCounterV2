@@ -9,6 +9,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import com.example.myhourlystepcounterv2.data.StepPreferences
+import com.example.myhourlystepcounterv2.data.StepRepository
+import com.example.myhourlystepcounterv2.data.StepDatabase
 import com.example.myhourlystepcounterv2.sensor.StepSensorManager
 import java.util.Calendar
 
@@ -29,6 +31,12 @@ class HourBoundaryReceiver : BroadcastReceiver() {
             try {
                 val sensorManager = StepSensorManager.getInstance(context.applicationContext)
                 val preferences = StepPreferences(context.applicationContext)
+                val database = StepDatabase.getDatabase(context.applicationContext)
+                val repository = StepRepository(database.stepDao())
+
+                // Get the PREVIOUS hour's data that needs to be saved
+                val previousHourTimestamp = preferences.currentHourTimestamp.first()
+                val previousHourStartStepCount = preferences.hourStartStepCount.first()
 
                 // Get current device total from sensor (or fallback to preferences)
                 val currentDeviceTotal = sensorManager.getCurrentTotalSteps()
@@ -43,6 +51,26 @@ class HourBoundaryReceiver : BroadcastReceiver() {
                     )
                     fallbackTotal
                 }
+
+                // Calculate steps in the PREVIOUS hour (that just ended)
+                var stepsInPreviousHour = deviceTotal - previousHourStartStepCount
+
+                // Validate and clamp the value
+                val MAX_STEPS_PER_HOUR = 10000
+                if (stepsInPreviousHour < 0) {
+                    android.util.Log.w("HourBoundary", "Negative step delta ($stepsInPreviousHour). Clamping to 0.")
+                    stepsInPreviousHour = 0
+                } else if (stepsInPreviousHour > MAX_STEPS_PER_HOUR) {
+                    android.util.Log.w("HourBoundary", "Unreasonable step delta ($stepsInPreviousHour). Clamping to $MAX_STEPS_PER_HOUR.")
+                    stepsInPreviousHour = MAX_STEPS_PER_HOUR
+                }
+
+                // Save the completed previous hour to database
+                android.util.Log.i(
+                    "HourBoundary",
+                    "Saving completed hour: timestamp=$previousHourTimestamp, steps=$stepsInPreviousHour (device=$deviceTotal - baseline=$previousHourStartStepCount)"
+                )
+                repository.saveHourlySteps(previousHourTimestamp, stepsInPreviousHour)
 
                 // Calculate current hour timestamp
                 val currentHourTimestamp = Calendar.getInstance().apply {
@@ -72,7 +100,7 @@ class HourBoundaryReceiver : BroadcastReceiver() {
 
                 android.util.Log.i(
                     "HourBoundary",
-                    "✓ Hour boundary processed: Sensor reset to baseline=$deviceTotal, display=0, notification will update"
+                    "✓ Hour boundary processed: Saved $stepsInPreviousHour steps, reset to baseline=$deviceTotal, display=0"
                 )
 
                 // Reschedule the next alarm (1 hour from now at XX:00)
