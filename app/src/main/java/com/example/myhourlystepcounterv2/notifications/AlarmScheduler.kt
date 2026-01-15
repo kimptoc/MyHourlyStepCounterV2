@@ -124,12 +124,11 @@ object AlarmScheduler {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        // Calculate next XX:00 time
+        // Calculate next XX:00 time (always at least 1 hour from now)
         val calendar = Calendar.getInstance().apply {
-            if (get(Calendar.MINUTE) > 0 || get(Calendar.SECOND) > 0) {
-                // If past :00, schedule for next hour
-                add(Calendar.HOUR_OF_DAY, 1)
-            }
+            // Always add 1 hour to avoid rescheduling for the current hour
+            // when called at exactly XX:00:00 from the receiver
+            add(Calendar.HOUR_OF_DAY, 1)
             set(Calendar.MINUTE, 0)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
