@@ -29,12 +29,10 @@ object AlarmScheduler {
             }
         }
 
-        // Create action-based intent (implicit broadcast)
-        // Using action only (no explicit component) to avoid duplicate deliveries
-        // when combined with exported="true" and intent-filter in manifest
-        val intent = Intent(StepReminderReceiver.ACTION_STEP_REMINDER).apply {
-            // Set package to ensure it only goes to our app
-            setPackage(context.packageName)
+        // Create explicit intent to target the receiver directly
+        // With exported="false" in manifest, this prevents duplicate deliveries
+        val intent = Intent(context, StepReminderReceiver::class.java).apply {
+            action = StepReminderReceiver.ACTION_STEP_REMINDER
         }
 
         val pendingIntent = PendingIntent.getBroadcast(
@@ -76,8 +74,8 @@ object AlarmScheduler {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
 
         // Create intent matching the one used for scheduling
-        val intent = Intent(StepReminderReceiver.ACTION_STEP_REMINDER).apply {
-            setPackage(context.packageName)
+        val intent = Intent(context, StepReminderReceiver::class.java).apply {
+            action = StepReminderReceiver.ACTION_STEP_REMINDER
         }
 
         val pendingIntent = PendingIntent.getBroadcast(
@@ -113,12 +111,10 @@ object AlarmScheduler {
             }
         }
 
-        // Create action-based intent (implicit broadcast)
-        // Using action only (no explicit component) to avoid duplicate deliveries
-        // when combined with exported="true" and intent-filter in manifest
-        val intent = Intent(HourBoundaryReceiver.ACTION_HOUR_BOUNDARY).apply {
-            // Set package to ensure it only goes to our app
-            setPackage(context.packageName)
+        // Create explicit intent to target the receiver directly
+        // With exported="false" in manifest, this prevents duplicate deliveries
+        val intent = Intent(context, HourBoundaryReceiver::class.java).apply {
+            action = HourBoundaryReceiver.ACTION_HOUR_BOUNDARY
         }
 
         val pendingIntent = PendingIntent.getBroadcast(
@@ -160,8 +156,8 @@ object AlarmScheduler {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
 
         // Create intent matching the one used for scheduling
-        val intent = Intent(HourBoundaryReceiver.ACTION_HOUR_BOUNDARY).apply {
-            setPackage(context.packageName)
+        val intent = Intent(context, HourBoundaryReceiver::class.java).apply {
+            action = HourBoundaryReceiver.ACTION_HOUR_BOUNDARY
         }
 
         val pendingIntent = PendingIntent.getBroadcast(

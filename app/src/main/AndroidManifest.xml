@@ -54,20 +54,12 @@
         <!-- Receiver for step reminder alarms -->
         <receiver
             android:name=".notifications.StepReminderReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.example.myhourlystepcounterv2.ACTION_STEP_REMINDER" />
-            </intent-filter>
-        </receiver>
+            android:exported="false" />
 
         <!-- Receiver for hour boundary alarms (XX:00) -->
         <receiver
             android:name=".notifications.HourBoundaryReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.example.myhourlystepcounterv2.ACTION_HOUR_BOUNDARY" />
-            </intent-filter>
-        </receiver>
+            android:exported="false" />
     </application>
 
 </manifest>
