@@ -16,6 +16,10 @@ import kotlinx.coroutines.launch
 import com.example.myhourlystepcounterv2.data.StepPreferences
 import com.example.myhourlystepcounterv2.notifications.NotificationHelper
 import com.example.myhourlystepcounterv2.StepTrackerConfig
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.read
+import kotlin.concurrent.write
 
 class StepSensorManager private constructor(context: Context) : SensorEventListener {
     private val sensorManager = context.applicationContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
@@ -24,9 +28,14 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
     private val preferences = StepPreferences(appContext)
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
+    // Thread-safe state management with ReadWriteLock
+    private val stateLock = ReentrantReadWriteLock()
+    private val hourTransitionInProgress = AtomicBoolean(false)
+
     private val _currentStepCount = MutableStateFlow(0)
     val currentStepCount: StateFlow<Int> = _currentStepCount.asStateFlow()
 
+    // All mutable state - must be accessed with stateLock
     private var lastKnownStepCount = 0
     private var lastHourStartStepCount = 0
     private var isInitialized = false
@@ -58,28 +67,44 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
     }
 
     override fun onSensorChanged(event: SensorEvent?) {
-        if (event?.sensor?.type == Sensor.TYPE_STEP_COUNTER) {
+        if (event?.sensor?.type != Sensor.TYPE_STEP_COUNTER) return
+
+        // Skip sensor events during hour transitions to prevent race conditions
+        if (hourTransitionInProgress.get()) {
+            android.util.Log.d("StepSensor", "Hour transition in progress, deferring sensor event")
+            return
+        }
+
+        // Use read lock for sensor events (allows concurrent reads, blocks during write operations)
+        stateLock.read {
             val stepCount = event.values[0].toInt()
 
             // Detect significant sensor resets (e.g., when another app like Samsung Health accesses sensor)
             // Only adjust if drop is significant (more than 10 steps), not just minor fluctuations
             val delta = stepCount - previousSensorValue
             if (previousSensorValue > 0 && delta < -10) {  // Significant drop
-                // Calculate how much the sensor dropped
-                val resetDelta = previousSensorValue - stepCount
-                val oldBaseline = lastHourStartStepCount
+                // Need write lock for baseline adjustment - upgrade to write lock
+                stateLock.write {
+                    val resetDelta = previousSensorValue - stepCount
+                    val oldBaseline = lastHourStartStepCount
 
-                // Adjust the hour baseline DOWN by the same amount to preserve accumulated steps
-                // This maintains the delta: (newSensor - newBaseline) = (oldSensor - oldBaseline)
-                lastHourStartStepCount = maxOf(0, lastHourStartStepCount - resetDelta)
+                    // Adjust the hour baseline DOWN by the same amount to preserve accumulated steps
+                    // This maintains the delta: (newSensor - newBaseline) = (oldSensor - oldBaseline)
+                    lastHourStartStepCount = maxOf(0, lastHourStartStepCount - resetDelta)
 
-                android.util.Log.w(
-                    "StepSensor",
-                    "🔄 SENSOR RESET DETECTED & ADJUSTED: previous=$previousSensorValue, current=$stepCount, " +
-                            "resetDelta=$resetDelta. Adjusted baseline: $oldBaseline → $lastHourStartStepCount " +
-                            "to preserve accumulated steps. Another app may have accessed the sensor (e.g., Samsung Health)."
-                )
-                // Continue processing with adjusted baseline (don't return early)
+                    android.util.Log.w(
+                        "StepSensor",
+                        "🔄 SENSOR RESET DETECTED & ADJUSTED: previous=$previousSensorValue, current=$stepCount, " +
+                                "resetDelta=$resetDelta. Adjusted baseline: $oldBaseline → $lastHourStartStepCount " +
+                                "to preserve accumulated steps. Another app may have accessed the sensor (e.g., Samsung Health)."
+                    )
+
+                    // Persist adjustment immediately
+                    scope.launch {
+                        preferences.saveHourStartStepCount(lastHourStartStepCount)
+                    }
+                }
+                // Note: We're still in the outer read lock here
             }
 
             val stepsThisHour = stepCount - lastHourStartStepCount
@@ -91,7 +116,7 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
             lastKnownStepCount = stepCount
             // Only update display if initialized (prevents showing full device total on first fire)
             if (isInitialized) {
-                updateStepsForCurrentHour()
+                updateStepsForCurrentHourLocked()
             }
         }
     }
@@ -99,31 +124,40 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     fun setLastHourStartStepCount(stepCount: Int) {
-        val oldBaseline = lastHourStartStepCount
-        lastHourStartStepCount = stepCount
-        android.util.Log.i(
-            "StepSensor",
-            "setLastHourStartStepCount: BASELINE_CHANGED from $oldBaseline to $stepCount | " +
-                    "lastKnown=$lastKnownStepCount | calculated delta would be ${lastKnownStepCount - stepCount}"
-        )
-        updateStepsForCurrentHour()
+        stateLock.write {
+            val oldBaseline = lastHourStartStepCount
+            lastHourStartStepCount = stepCount
+            android.util.Log.i(
+                "StepSensor",
+                "setLastHourStartStepCount: BASELINE_CHANGED from $oldBaseline to $stepCount | " +
+                        "lastKnown=$lastKnownStepCount | calculated delta would be ${lastKnownStepCount - stepCount}"
+            )
+            updateStepsForCurrentHourLocked()
+        }
     }
 
     fun setLastKnownStepCount(stepCount: Int) {
-        android.util.Log.d("StepSensor", "setLastKnownStepCount: $stepCount (was $lastKnownStepCount)")
-        lastKnownStepCount = stepCount
-        previousSensorValue = stepCount  // Update tracking for reset detection
-        updateStepsForCurrentHour()
+        stateLock.write {
+            android.util.Log.d("StepSensor", "setLastKnownStepCount: $stepCount (was $lastKnownStepCount)")
+            lastKnownStepCount = stepCount
+            previousSensorValue = stepCount  // Update tracking for reset detection
+            updateStepsForCurrentHourLocked()
+        }
     }
 
     fun markInitialized() {
-        android.util.Log.d("StepSensor", "markInitialized: isInitialized=$isInitialized -> true. About to call updateStepsForCurrentHour()")
-        isInitialized = true
-        // Recalculate with current values now that we're initialized
-        updateStepsForCurrentHour()
+        stateLock.write {
+            android.util.Log.d("StepSensor", "markInitialized: isInitialized=$isInitialized -> true. About to call updateStepsForCurrentHour()")
+            isInitialized = true
+            // Recalculate with current values now that we're initialized
+            updateStepsForCurrentHourLocked()
+        }
     }
 
-    private fun updateStepsForCurrentHour() {
+    /**
+     * Internal method - must be called while holding stateLock (read or write)
+     */
+    private fun updateStepsForCurrentHourLocked() {
         val stepsThisHour = lastKnownStepCount - lastHourStartStepCount
         val finalValue = maxOf(0, stepsThisHour)
         android.util.Log.d("StepSensor", "updateStepsForCurrentHour: lastKnown=$lastKnownStepCount - hourStart=$lastHourStartStepCount = $stepsThisHour -> finalValue=$finalValue, isInit=$isInitialized")
@@ -175,12 +209,43 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
         }
     }
 
-    fun resetForNewHour(currentStepCount: Int) {
-        lastHourStartStepCount = currentStepCount
-        previousSensorValue = currentStepCount  // Update tracking for reset detection
-        _currentStepCount.value = 0
-        wasBelowThreshold = false  // Reset achievement tracking for new hour
-        android.util.Log.i("StepSensor", "resetForNewHour: Baseline set to $currentStepCount, display reset to 0")
+    /**
+     * Begins an hour transition, blocking sensor events from interfering
+     */
+    fun beginHourTransition() {
+        hourTransitionInProgress.set(true)
+        android.util.Log.d("StepSensor", "Hour transition started - sensor events will be deferred")
+    }
+
+    /**
+     * Ends an hour transition, allowing sensor events to resume
+     */
+    fun endHourTransition() {
+        hourTransitionInProgress.set(false)
+        android.util.Log.d("StepSensor", "Hour transition completed - sensor events resumed")
+    }
+
+    /**
+     * Resets the sensor baseline for a new hour. Use with begin/endHourTransition.
+     * Returns false if this baseline was already set (duplicate call).
+     */
+    fun resetForNewHour(currentStepCount: Int): Boolean {
+        return stateLock.write {
+            // Prevent duplicate resets from race conditions
+            if (lastHourStartStepCount == currentStepCount) {
+                android.util.Log.d("StepSensor", "resetForNewHour: Baseline already set to $currentStepCount, ignoring duplicate")
+                return@write false
+            }
+
+            val oldBaseline = lastHourStartStepCount
+            lastHourStartStepCount = currentStepCount
+            previousSensorValue = currentStepCount  // Update tracking for reset detection
+            _currentStepCount.value = 0
+            wasBelowThreshold = false  // Reset achievement tracking for new hour
+
+            android.util.Log.i("StepSensor", "resetForNewHour: Baseline set to $currentStepCount (was $oldBaseline), display reset to 0")
+            return@write true
+        }
     }
 
     /**
@@ -189,23 +254,30 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
      * Returns true if baseline was updated (meaning hour actually changed).
      */
     fun updateHourBaselineIfNeeded(newBaseline: Int): Boolean {
-        if (lastHourStartStepCount != newBaseline) {
-            android.util.Log.i(
-                "StepSensor",
-                "updateHourBaselineIfNeeded: Baseline changed from $lastHourStartStepCount to $newBaseline. " +
-                "Resetting display to 0 for new hour."
-            )
-            resetForNewHour(newBaseline)
-            return true
-        } else {
-            android.util.Log.d(
-                "StepSensor",
-                "updateHourBaselineIfNeeded: Baseline already $newBaseline, skipping reset. " +
-                "Current hour steps: ${_currentStepCount.value} (preserved)"
-            )
-            return false
+        return stateLock.write {
+            if (lastHourStartStepCount != newBaseline) {
+                android.util.Log.i(
+                    "StepSensor",
+                    "updateHourBaselineIfNeeded: Baseline changed from $lastHourStartStepCount to $newBaseline. " +
+                    "Resetting display to 0 for new hour."
+                )
+                // Call resetForNewHour which is already synchronized
+                // Note: We're already in a write lock, so resetForNewHour will succeed
+                return@write resetForNewHour(newBaseline)
+            } else {
+                android.util.Log.d(
+                    "StepSensor",
+                    "updateHourBaselineIfNeeded: Baseline already $newBaseline, skipping reset. " +
+                    "Current hour steps: ${_currentStepCount.value} (preserved)"
+                )
+                return@write false
+            }
         }
     }
 
-    fun getCurrentTotalSteps(): Int = lastKnownStepCount
+    fun getCurrentTotalSteps(): Int {
+        return stateLock.read {
+            lastKnownStepCount
+        }
+    }
 }

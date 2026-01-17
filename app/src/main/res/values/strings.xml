@@ -15,6 +15,6 @@
     <string name="reminder_notification_text">Only %1$d steps this hour. Get moving to reach %2$d steps before the hour ends!</string>
 
     <!-- Achievement notification strings -->
-    <string name="achievement_notification_title">Hourly goal complete! 🎉</string>
-    <string name="achievement_notification_text">Excellent! You hit %1$d steps this hour!</string>
+    <string name="achievement_notification_title">Goal achieved! 🎉</string>
+    <string name="achievement_notification_text">Great job! You reached %1$d steps this hour after the reminder!</string>
 </resources>

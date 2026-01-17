@@ -20,7 +20,12 @@ class HourBoundaryReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != ACTION_HOUR_BOUNDARY) return
+        android.util.Log.i("HourBoundary", "onReceive called! action=${intent.action}, expected=$ACTION_HOUR_BOUNDARY")
+
+        if (intent.action != ACTION_HOUR_BOUNDARY) {
+            android.util.Log.w("HourBoundary", "Wrong action received, ignoring")
+            return
+        }
 
         android.util.Log.i("HourBoundary", "Hour boundary alarm triggered at ${Calendar.getInstance().time}")
 
@@ -84,24 +89,37 @@ class HourBoundaryReceiver : BroadcastReceiver() {
                     "Processing hour boundary: deviceTotal=$deviceTotal, newHourTimestamp=$currentHourTimestamp"
                 )
 
-                // Reset sensor for new hour (updates display to 0)
-                sensorManager.resetForNewHour(deviceTotal)
+                // Begin hour transition - blocks sensor events from interfering
+                sensorManager.beginHourTransition()
 
-                // Update preferences with new hour baseline
-                preferences.saveHourData(
-                    hourStartStepCount = deviceTotal,
-                    currentTimestamp = currentHourTimestamp,
-                    totalSteps = deviceTotal
-                )
+                try {
+                    // Reset sensor for new hour (updates display to 0)
+                    val resetSuccessful = sensorManager.resetForNewHour(deviceTotal)
 
-                // Reset reminder/achievement flags for new hour
-                preferences.saveReminderSentThisHour(false)
-                preferences.saveAchievementSentThisHour(false)
+                    if (!resetSuccessful) {
+                        android.util.Log.w("HourBoundary", "Baseline already set, skipping duplicate reset")
+                        return@launch
+                    }
 
-                android.util.Log.i(
-                    "HourBoundary",
-                    "✓ Hour boundary processed: Saved $stepsInPreviousHour steps, reset to baseline=$deviceTotal, display=0"
-                )
+                    // Update preferences with new hour baseline
+                    preferences.saveHourData(
+                        hourStartStepCount = deviceTotal,
+                        currentTimestamp = currentHourTimestamp,
+                        totalSteps = deviceTotal
+                    )
+
+                    // Reset reminder/achievement flags for new hour
+                    preferences.saveReminderSentThisHour(false)
+                    preferences.saveAchievementSentThisHour(false)
+
+                    android.util.Log.i(
+                        "HourBoundary",
+                        "✓ Hour boundary processed: Saved $stepsInPreviousHour steps, reset to baseline=$deviceTotal, display=0"
+                    )
+                } finally {
+                    // End hour transition - resume sensor events
+                    sensorManager.endHourTransition()
+                }
 
                 // Reschedule the next alarm (1 hour from now at XX:00)
                 AlarmScheduler.scheduleHourBoundaryAlarms(context.applicationContext)

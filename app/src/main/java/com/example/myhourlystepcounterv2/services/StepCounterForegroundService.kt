@@ -13,12 +13,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import com.example.myhourlystepcounterv2.R
 import com.example.myhourlystepcounterv2.data.StepPreferences
+import com.example.myhourlystepcounterv2.StepTrackerConfig
 
 class StepCounterForegroundService : android.app.Service() {
     companion object {
@@ -30,14 +32,16 @@ class StepCounterForegroundService : android.app.Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private lateinit var sensorManager: com.example.myhourlystepcounterv2.sensor.StepSensorManager
+    private lateinit var preferences: StepPreferences
+    private lateinit var repository: com.example.myhourlystepcounterv2.data.StepRepository
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
 
-        val preferences = StepPreferences(applicationContext)
+        preferences = StepPreferences(applicationContext)
         val database = com.example.myhourlystepcounterv2.data.StepDatabase.getDatabase(applicationContext)
-        val repository = com.example.myhourlystepcounterv2.data.StepRepository(database.stepDao())
+        repository = com.example.myhourlystepcounterv2.data.StepRepository(database.stepDao())
 
         // Get singleton sensor manager (already initialized by ViewModel)
         sensorManager = com.example.myhourlystepcounterv2.sensor.StepSensorManager.getInstance(applicationContext)
@@ -87,6 +91,36 @@ class StepCounterForegroundService : android.app.Service() {
 
                 // Handle wake-lock
                 handleWakeLock(useWake)
+            }
+        }
+
+        // Hour boundary detection - runs continuously while service is active
+        scope.launch {
+            android.util.Log.i("StepCounterFGSvc", "Hour boundary detection coroutine started")
+
+            // Check if we missed any hour boundaries while service was stopped
+            checkMissedHourBoundaries()
+
+            while (true) {
+                val now = java.util.Calendar.getInstance()
+                val nextHour = java.util.Calendar.getInstance().apply {
+                    add(java.util.Calendar.HOUR_OF_DAY, 1)
+                    set(java.util.Calendar.MINUTE, 0)
+                    set(java.util.Calendar.SECOND, 0)
+                    set(java.util.Calendar.MILLISECOND, 0)
+                }
+
+                val delayMs = nextHour.timeInMillis - now.timeInMillis
+                android.util.Log.i(
+                    "StepCounterFGSvc",
+                    "Next hour boundary in ${delayMs}ms at ${nextHour.time} (current: ${now.time})"
+                )
+
+                delay(delayMs)
+
+                // Hour boundary reached - execute logic
+                android.util.Log.i("StepCounterFGSvc", "Hour boundary reached at ${java.util.Calendar.getInstance().time}")
+                handleHourBoundary()
             }
         }
     }
@@ -171,6 +205,177 @@ class StepCounterForegroundService : android.app.Service() {
         handleWakeLock(false)
         stopForeground(true)
         stopSelf()
+    }
+
+    /**
+     * Check if any hour boundaries were missed while the service was stopped.
+     * This handles the case where user disabled permanent notification and later re-enabled it.
+     */
+    private suspend fun checkMissedHourBoundaries() {
+        try {
+            val currentHourTimestamp = java.util.Calendar.getInstance().apply {
+                set(java.util.Calendar.MINUTE, 0)
+                set(java.util.Calendar.SECOND, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+            }.timeInMillis
+
+            val savedHourTimestamp = preferences.currentHourTimestamp.first()
+
+            if (savedHourTimestamp > 0 && savedHourTimestamp < currentHourTimestamp) {
+                val hoursDifference = (currentHourTimestamp - savedHourTimestamp) / (60 * 60 * 1000)
+
+                if (hoursDifference > 0) {
+                    android.util.Log.w(
+                        "StepCounterFGSvc",
+                        "Service restart detected: missed $hoursDifference hour boundaries. " +
+                                "Last saved hour: ${java.util.Date(savedHourTimestamp)}, " +
+                                "current hour: ${java.util.Date(currentHourTimestamp)}"
+                    )
+
+                    // Save the incomplete hour with current steps (best effort)
+                    val currentDeviceTotal = sensorManager.getCurrentTotalSteps()
+                    val previousHourStartSteps = preferences.hourStartStepCount.first()
+
+                    if (currentDeviceTotal > 0 && previousHourStartSteps > 0) {
+                        var stepsInPreviousHour = currentDeviceTotal - previousHourStartSteps
+
+                        // Validate
+                        if (stepsInPreviousHour < 0) {
+                            stepsInPreviousHour = 0
+                        } else if (stepsInPreviousHour > StepTrackerConfig.MAX_STEPS_PER_HOUR) {
+                            stepsInPreviousHour = StepTrackerConfig.MAX_STEPS_PER_HOUR
+                        }
+
+                        android.util.Log.i(
+                            "StepCounterFGSvc",
+                            "Saving missed hour: timestamp=$savedHourTimestamp, steps=$stepsInPreviousHour"
+                        )
+                        repository.saveHourlySteps(savedHourTimestamp, stepsInPreviousHour)
+                    }
+
+                    // Reset for current hour
+                    sensorManager.beginHourTransition()
+                    try {
+                        val resetSuccessful = sensorManager.resetForNewHour(currentDeviceTotal)
+                        if (resetSuccessful) {
+                            preferences.saveHourData(
+                                hourStartStepCount = currentDeviceTotal,
+                                currentTimestamp = currentHourTimestamp,
+                                totalSteps = currentDeviceTotal
+                            )
+
+                            // Reset notification flags for new hour
+                            preferences.saveReminderSentThisHour(false)
+                            preferences.saveAchievementSentThisHour(false)
+
+                            android.util.Log.i(
+                                "StepCounterFGSvc",
+                                "Reset to current hour: baseline=$currentDeviceTotal, timestamp=$currentHourTimestamp"
+                            )
+                        }
+                    } finally {
+                        sensorManager.endHourTransition()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("StepCounterFGSvc", "Error checking missed hour boundaries", e)
+        }
+    }
+
+    /**
+     * Handle hour boundary: save completed hour and reset for new hour.
+     * Extracted from HourBoundaryReceiver for reuse in foreground service.
+     */
+    private suspend fun handleHourBoundary() {
+        try {
+            // Get the PREVIOUS hour's data that needs to be saved
+            val previousHourTimestamp = preferences.currentHourTimestamp.first()
+            val previousHourStartStepCount = preferences.hourStartStepCount.first()
+
+            // Get current device total from sensor (or fallback to preferences)
+            val currentDeviceTotal = sensorManager.getCurrentTotalSteps()
+            val fallbackTotal = preferences.totalStepsDevice.first()
+
+            val deviceTotal = if (currentDeviceTotal > 0) {
+                currentDeviceTotal
+            } else {
+                android.util.Log.w(
+                    "StepCounterFGSvc",
+                    "Sensor returned 0, using preferences fallback: $fallbackTotal"
+                )
+                fallbackTotal
+            }
+
+            // Calculate steps in the PREVIOUS hour (that just ended)
+            var stepsInPreviousHour = deviceTotal - previousHourStartStepCount
+
+            // Validate and clamp the value
+            if (stepsInPreviousHour < 0) {
+                android.util.Log.w("StepCounterFGSvc", "Negative step delta ($stepsInPreviousHour). Clamping to 0.")
+                stepsInPreviousHour = 0
+            } else if (stepsInPreviousHour > StepTrackerConfig.MAX_STEPS_PER_HOUR) {
+                android.util.Log.w("StepCounterFGSvc", "Unreasonable step delta ($stepsInPreviousHour). Clamping to ${StepTrackerConfig.MAX_STEPS_PER_HOUR}.")
+                stepsInPreviousHour = StepTrackerConfig.MAX_STEPS_PER_HOUR
+            }
+
+            // Save the completed previous hour to database
+            android.util.Log.i(
+                "StepCounterFGSvc",
+                "Saving completed hour: timestamp=$previousHourTimestamp (${java.util.Date(previousHourTimestamp)}), steps=$stepsInPreviousHour (device=$deviceTotal - baseline=$previousHourStartStepCount)"
+            )
+            repository.saveHourlySteps(previousHourTimestamp, stepsInPreviousHour)
+
+            // Calculate current hour timestamp
+            val currentHourTimestamp = java.util.Calendar.getInstance().apply {
+                set(java.util.Calendar.MINUTE, 0)
+                set(java.util.Calendar.SECOND, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+            }.timeInMillis
+
+            android.util.Log.i(
+                "StepCounterFGSvc",
+                "Processing hour boundary: deviceTotal=$deviceTotal, newHourTimestamp=$currentHourTimestamp (${java.util.Date(currentHourTimestamp)})"
+            )
+
+            // Begin hour transition - blocks sensor events from interfering
+            sensorManager.beginHourTransition()
+
+            try {
+                // Reset sensor for new hour (updates display to 0)
+                val resetSuccessful = sensorManager.resetForNewHour(deviceTotal)
+
+                if (!resetSuccessful) {
+                    android.util.Log.w("StepCounterFGSvc", "Baseline already set, skipping duplicate reset")
+                    return
+                }
+
+                // Update preferences with new hour baseline
+                preferences.saveHourData(
+                    hourStartStepCount = deviceTotal,
+                    currentTimestamp = currentHourTimestamp,
+                    totalSteps = deviceTotal
+                )
+
+                // Reset reminder/achievement flags for new hour
+                preferences.saveReminderSentThisHour(false)
+                preferences.saveAchievementSentThisHour(false)
+
+                android.util.Log.i(
+                    "StepCounterFGSvc",
+                    "✓ Hour boundary processed: Saved $stepsInPreviousHour steps, reset to baseline=$deviceTotal, display=0"
+                )
+            } finally {
+                // End hour transition - resume sensor events
+                sensorManager.endHourTransition()
+            }
+
+            // Reschedule alarm as backup (in case service stops)
+            com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleHourBoundaryAlarms(applicationContext)
+            android.util.Log.d("StepCounterFGSvc", "Rescheduled backup alarm for next hour")
+        } catch (e: Exception) {
+            android.util.Log.e("StepCounterFGSvc", "Error processing hour boundary", e)
+        }
     }
 
     override fun onDestroy() {

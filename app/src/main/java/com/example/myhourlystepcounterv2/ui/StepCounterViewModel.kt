@@ -26,13 +26,9 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
     private lateinit var sensorManager: StepSensorManager
     private lateinit var preferences: StepPreferences
 
-    // Guards to prevent duplicate initialization and concurrent hour checks
+    // Guard to prevent duplicate initialization
     @Volatile
     private var isInitialized = false
-    @Volatile
-    private var isCheckingHourBoundary = false
-    @Volatile
-    private var isHourCheckScheduled = false
 
     private val _hourlySteps = MutableStateFlow(0)
     val hourlySteps: StateFlow<Int> = _hourlySteps.asStateFlow()
@@ -443,159 +439,6 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                 )
             }
         }
-
-        // Schedule hour boundary checks - MUST be called after initialize() completes
-        // to ensure sensorManager and preferences are initialized
-        scheduleHourBoundaryCheck()
-    }
-
-    /**
-     * Schedule hour boundary checks to run at exact hour transitions (XX:00:01).
-     *
-     * IMPORTANT: Must be called AFTER initialize() completes to ensure sensorManager
-     * and preferences are initialized. Calling this before initialization could cause
-     * lateinit exceptions. This is called automatically from initialize().
-     */
-    fun scheduleHourBoundaryCheck() {
-        // Guard against multiple scheduling loops with atomic check-and-set
-        synchronized(this) {
-            if (isHourCheckScheduled) {
-                android.util.Log.w("StepCounter", "scheduleHourBoundaryCheck() already scheduled - ignoring duplicate call")
-                return
-            }
-            isHourCheckScheduled = true
-        }
-        android.util.Log.d("StepCounter", "scheduleHourBoundaryCheck() starting schedule loop...")
-
-        viewModelScope.launch {
-            while (true) {
-                val now = Calendar.getInstance()
-                val nextHour = Calendar.getInstance().apply {
-                    add(Calendar.HOUR_OF_DAY, 1)
-                    set(Calendar.MINUTE, 0)
-                    set(Calendar.SECOND, 1) // Check 1 second after hour starts
-                    set(Calendar.MILLISECOND, 0)
-                }
-                val delayMs = nextHour.timeInMillis - now.timeInMillis
-
-                android.util.Log.d("StepCounter", "Scheduled hour check in ${delayMs}ms (at ${nextHour.time})")
-                delay(delayMs)
-
-                checkAndResetHour()
-            }
-        }
-    }
-
-    fun checkAndResetHour() {
-        // Guard against concurrent hour boundary checks with atomic check-and-set
-        synchronized(this) {
-            if (isCheckingHourBoundary) {
-                android.util.Log.d("StepCounter", "checkAndResetHour() already in progress - skipping duplicate call")
-                return
-            }
-            isCheckingHourBoundary = true
-        }
-
-        val calendar = Calendar.getInstance()
-        val currentHourTimestamp = calendar.apply {
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }.timeInMillis
-
-        viewModelScope.launch {
-            try {
-                val savedHourTimestamp = preferences.currentHourTimestamp.first()
-
-                if (currentHourTimestamp != savedHourTimestamp) {
-                    // Hour has changed! Save the previous hour's data
-                    val savedTime = java.text.SimpleDateFormat(
-                        "yyyy-MM-dd HH:mm:ss",
-                        java.util.Locale.getDefault()
-                    ).format(java.util.Date(savedHourTimestamp))
-                    val currentTime = java.text.SimpleDateFormat(
-                        "yyyy-MM-dd HH:mm:ss",
-                        java.util.Locale.getDefault()
-                    ).format(java.util.Date(currentHourTimestamp))
-
-                    android.util.Log.i(
-                        "StepCounter",
-                        "⏰ HOUR BOUNDARY DETECTED: $savedTime → $currentTime"
-                    )
-
-                    val hourStartStepCount = preferences.hourStartStepCount.first()
-
-                    // Use LIVE sensor value at hour boundary, not cached preferences
-                    // The sensor has the most accurate current value; preferences may be stale
-                    // if sensor hasn't fired recently (e.g., app backgrounded)
-                    val liveSensorValue = sensorManager.getCurrentTotalSteps()
-                    val cachedPrefsValue = preferences.totalStepsDevice.first()
-
-                    // Prefer live sensor if available; fall back to prefs if sensor returns 0
-                    val currentDeviceSteps = if (liveSensorValue > 0) {
-                        if (liveSensorValue != cachedPrefsValue) {
-                            android.util.Log.w(
-                                "StepCounter",
-                                "Hour boundary: Using LIVE sensor ($liveSensorValue) instead of stale preferences ($cachedPrefsValue). " +
-                                        "Difference: ${liveSensorValue - cachedPrefsValue} steps would have been lost."
-                            )
-                        }
-                        liveSensorValue
-                    } else {
-                        android.util.Log.d(
-                            "StepCounter",
-                            "Hour boundary: Sensor unavailable (0), using cached preferences value: $cachedPrefsValue"
-                        )
-                        cachedPrefsValue
-                    }
-
-                    android.util.Log.d(
-                        "StepCounter",
-                        "ViewModel hour save: hourStart=$hourStartStepCount, currentDevice=$currentDeviceSteps (live=$liveSensorValue, cached=$cachedPrefsValue)"
-                    )
-
-                    // Calculate steps in the previous hour
-                    var stepsInPreviousHour = currentDeviceSteps - hourStartStepCount
-
-                    // Validate the delta - reject unreasonable values
-                    val MAX_REASONABLE_STEPS_PER_HOUR = 10000
-                    if (stepsInPreviousHour < 0) {
-                        android.util.Log.w("StepCounter", "WARNING: Negative step delta ($stepsInPreviousHour). Sensor may have reset. Clamping to 0.")
-                        stepsInPreviousHour = 0
-                    } else if (stepsInPreviousHour > MAX_REASONABLE_STEPS_PER_HOUR) {
-                        android.util.Log.w("StepCounter", "WARNING: Unreasonable step delta ($stepsInPreviousHour). Max expected is $MAX_REASONABLE_STEPS_PER_HOUR. Health app sync? Clamping to $MAX_REASONABLE_STEPS_PER_HOUR.")
-                        stepsInPreviousHour = MAX_REASONABLE_STEPS_PER_HOUR
-                    }
-
-                    // Save the previous hour's data to database
-                    repository.saveHourlySteps(savedHourTimestamp, stepsInPreviousHour)
-                    android.util.Log.i(
-                        "StepCounter",
-                        "✅ VIEWMODEL SAVED: Hour $savedTime → $stepsInPreviousHour steps"
-                    )
-
-                    // Update preferences for the new hour
-                    // New hour starts at current device step count
-                    preferences.saveHourData(
-                        hourStartStepCount = currentDeviceSteps,
-                        currentTimestamp = currentHourTimestamp,
-                        totalSteps = currentDeviceSteps
-                    )
-
-                    // Reset sensor manager for new hour
-                    sensorManager.resetForNewHour(currentDeviceSteps)
-
-                    // Force update of hourly steps to 0
-                    _hourlySteps.value = 0
-                } else {
-                    android.util.Log.d("StepCounter", "Hour check at ${calendar.time} - still in same hour")
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("StepCounter", "Error in checkAndResetHour", e)
-            } finally {
-                isCheckingHourBoundary = false
-            }
-        }
     }
 
     fun setLastHourStartStepCount(stepCount: Int) {
@@ -608,8 +451,17 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
      *
      * Defensive: Only refresh if sensor value increased or stayed same (never on decrease).
      * This prevents propagating stale values during mid-reset timing.
+     *
+     * IMPORTANT: Also handles closure period detection if UI hasn't been visible for a while.
      */
     fun refreshStepCounts() {
+        // Guard: Don't execute if ViewModel hasn't been initialized
+        // This prevents crashes when onResume() is called before initialize() completes
+        if (!isInitialized || !::sensorManager.isInitialized || !::preferences.isInitialized) {
+            android.util.Log.w("StepCounter", "refreshStepCounts: Skipping - ViewModel not fully initialized yet")
+            return
+        }
+
         viewModelScope.launch {
             // Force recalculation based on current sensor state
             val currentTotal = sensorManager.getCurrentTotalSteps()
@@ -634,6 +486,10 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                             "Forcing sensor manager to recalculate hourly delta."
                 )
 
+                // Check for closure period - UI might have been invisible for hours/days
+                // even if foreground service kept the app process alive
+                handleUiResumeClosure(currentTotal)
+
                 // Force the sensor manager to recalculate with current known values
                 sensorManager.setLastKnownStepCount(currentTotal)
 
@@ -642,6 +498,118 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                 android.util.Log.w("StepCounter", "refreshStepCounts: Could not read sensor")
             }
         }
+    }
+
+    /**
+     * Handles closure period detection when UI resumes after being invisible.
+     * This is critical for apps with foreground services that keep the process alive -
+     * initialize() won't be called again, so we need to detect closure here.
+     */
+    private suspend fun handleUiResumeClosure(currentDeviceTotal: Int) {
+        val currentStartOfDay = getStartOfDay()
+        val lastOpenDate = preferences.lastOpenDate.first()
+        val currentHourTimestamp = Calendar.getInstance().apply {
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+
+        // Check if this is first UI open of the day
+        val isFirstOpenOfDay = lastOpenDate != currentStartOfDay
+
+        if (!isFirstOpenOfDay) {
+            android.util.Log.d("StepCounter", "handleUiResumeClosure: Not first open today, skipping closure detection")
+            return
+        }
+
+        val savedDeviceTotal = preferences.totalStepsDevice.first()
+        val savedHourTimestamp = preferences.currentHourTimestamp.first()
+        val stepsWhileClosed = currentDeviceTotal - savedDeviceTotal
+        val currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        val isEarlyMorning = currentHour < StepTrackerConfig.MORNING_THRESHOLD_HOUR
+
+        android.util.Log.i(
+            "StepCounter",
+            "handleUiResumeClosure: FIRST UI OPEN TODAY detected! " +
+                    "lastOpenDate=${if (lastOpenDate > 0) java.util.Date(lastOpenDate) else "never"}, " +
+                    "today=${java.util.Date(currentStartOfDay)}, " +
+                    "stepsWhileClosed=$stepsWhileClosed, currentHour=$currentHour"
+        )
+
+        if (stepsWhileClosed > 10 && savedHourTimestamp > 0 && savedHourTimestamp < currentStartOfDay) {
+            // App was closed across a day boundary with significant steps
+            android.util.Log.i(
+                "StepCounter",
+                "UI CLOSURE PERIOD: Distributing $stepsWhileClosed steps. earlyMorning=$isEarlyMorning"
+            )
+
+            if (isEarlyMorning) {
+                // Early morning (before 10am): put all steps in current hour
+                val stepsClamped = minOf(stepsWhileClosed, StepTrackerConfig.MAX_STEPS_PER_HOUR)
+                android.util.Log.i("StepCounter", "Early morning UI resume: SAVING $stepsClamped steps to current hour ${java.util.Date(currentHourTimestamp)}")
+
+                repository.saveHourlySteps(currentHourTimestamp, stepsClamped)
+
+                // Verify save
+                val saved = repository.getStepForHour(currentHourTimestamp)
+                android.util.Log.i("StepCounter", "Early morning UI resume: Verified DB has ${saved?.stepCount ?: 0} steps for current hour")
+            } else {
+                // Later in day: distribute steps evenly across waking hours (threshold onwards)
+                val hoursAwake = currentHour - StepTrackerConfig.MORNING_THRESHOLD_HOUR
+                if (hoursAwake > 0) {
+                    val stepsPerHour = stepsWhileClosed / hoursAwake
+                    android.util.Log.i(
+                        "StepCounter",
+                        "Later in day UI resume: distributing $stepsWhileClosed steps across $hoursAwake hours (~$stepsPerHour/hour)"
+                    )
+
+                    // Save distributed steps for hours from threshold to now
+                    val distributedHours = mutableListOf<Long>()
+
+                    for (hour in 0 until hoursAwake) {
+                        // Create fresh calendar for each hour to avoid accumulation
+                        val hourCalendar = Calendar.getInstance().apply {
+                            set(Calendar.HOUR_OF_DAY, StepTrackerConfig.MORNING_THRESHOLD_HOUR + hour)
+                            set(Calendar.MINUTE, 0)
+                            set(Calendar.SECOND, 0)
+                            set(Calendar.MILLISECOND, 0)
+                        }
+                        val hourTimestamp = hourCalendar.timeInMillis
+
+                        val stepsClamped = minOf(stepsPerHour, StepTrackerConfig.MAX_STEPS_PER_HOUR)
+                        android.util.Log.i("StepCounter", "UI CLOSURE DISTRIBUTION: Saving hour ${StepTrackerConfig.MORNING_THRESHOLD_HOUR + hour}:00 (${java.util.Date(hourTimestamp)}) ← $stepsClamped steps")
+
+                        repository.saveHourlySteps(hourTimestamp, stepsClamped)
+                        distributedHours.add(hourTimestamp)
+                    }
+
+                    // Verify all saves committed
+                    android.util.Log.i("StepCounter", "UI CLOSURE DISTRIBUTION COMPLETE: Verifying ${distributedHours.size} hours...")
+                    for ((index, hourTs) in distributedHours.withIndex()) {
+                        val saved = repository.getStepForHour(hourTs)
+                        val hourNum = StepTrackerConfig.MORNING_THRESHOLD_HOUR + index
+                        android.util.Log.i("StepCounter", "  ✓ Hour $hourNum:00 → DB has ${saved?.stepCount ?: 0} steps")
+                    }
+                }
+            }
+
+            // Update current hour baseline after distribution
+            android.util.Log.i("StepCounter", "Post-UI-closure-distribution: Setting current hour baseline to $currentDeviceTotal")
+            preferences.saveHourData(
+                hourStartStepCount = currentDeviceTotal,
+                currentTimestamp = currentHourTimestamp,
+                totalSteps = currentDeviceTotal
+            )
+            sensorManager.setLastHourStartStepCount(currentDeviceTotal)
+            sensorManager.markInitialized()
+
+            // Record distribution time
+            preferences.saveLastDistributionTime(System.currentTimeMillis())
+        }
+
+        // Always update last open date when UI becomes visible
+        preferences.saveLastOpenDate(currentStartOfDay)
+        android.util.Log.d("StepCounter", "handleUiResumeClosure: Updated lastOpenDate to ${java.util.Date(currentStartOfDay)}")
     }
 
     override fun onCleared() {
