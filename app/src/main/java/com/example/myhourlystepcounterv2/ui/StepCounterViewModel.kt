@@ -441,7 +441,7 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
         }
     }
 
-    fun setLastHourStartStepCount(stepCount: Int) {
+    suspend fun setLastHourStartStepCount(stepCount: Int) {
         sensorManager.setLastHourStartStepCount(stepCount)
     }
 
