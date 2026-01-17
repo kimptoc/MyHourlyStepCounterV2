@@ -28,10 +28,21 @@ class StepReminderReceiver : BroadcastReceiver() {
             try {
                 val preferences = StepPreferences(context.applicationContext)
 
+                // Check if current time is within allowed window (8am to 10pm)
+                val currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+                if (currentHour < 8 || currentHour >= 23) { // 8am to 10pm (23:00)
+                    android.util.Log.d("StepReminder", "Outside allowed time window (8am-10pm), skipping")
+                    // Still reschedule for next hour to continue the cycle
+                    AlarmScheduler.scheduleStepReminders(context.applicationContext)
+                    return@launch
+                }
+
                 // Check if reminder notifications are enabled
                 val enabled = preferences.reminderNotificationEnabled.first()
                 if (!enabled) {
                     android.util.Log.d("StepReminder", "Reminder notifications disabled, skipping")
+                    // Still reschedule for next hour to continue the cycle
+                    AlarmScheduler.scheduleStepReminders(context.applicationContext)
                     return@launch
                 }
 
@@ -41,6 +52,8 @@ class StepReminderReceiver : BroadcastReceiver() {
 
                 if (lastNotificationTime >= currentHourStart) {
                     android.util.Log.d("StepReminder", "Already sent notification this hour, skipping")
+                    // Still reschedule for next hour to continue the cycle
+                    AlarmScheduler.scheduleStepReminders(context.applicationContext)
                     return@launch
                 }
 

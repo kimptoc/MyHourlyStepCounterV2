@@ -102,8 +102,10 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
                         lastKnownStepCount = stepCount
                     )
 
-                    // Persist adjustment immediately
-                    preferences.saveHourStartStepCount(newBaseline)
+                    // Persist adjustment immediately - OUTSIDE mutex to avoid blocking
+                    scope.launch {
+                        preferences.saveHourStartStepCount(newBaseline)
+                    }
                 } else {
                     // Normal case - update state with new values
                     newState = currentState.copy(
@@ -234,13 +236,15 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
                         )
 
                         NotificationHelper.sendStepAchievementNotification(appContext, currentSteps)
-                        preferences.saveAchievementSentThisHour(true)
 
-                        // Reset the flag so we don't check again this hour
+                        // Update the state first, then save to preferences (both outside mutex)
                         stateMutex.withLock {
                             val currentState = _sensorState.value
                             _sensorState.value = currentState.copy(wasBelowThreshold = false)
                         }
+
+                        // Save to preferences outside mutex to avoid blocking
+                        preferences.saveAchievementSentThisHour(true)
                     }
                 } catch (e: Exception) {
                     android.util.Log.e("StepSensor", "Error sending achievement notification", e)

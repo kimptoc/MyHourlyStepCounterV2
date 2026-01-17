@@ -41,23 +41,32 @@ app/
 │   ├── java/com/example/myhourlystepcounterv2/
 │   │   ├── MainActivity.kt                  # Entry point with edge-to-edge, permissions
 │   │   ├── PermissionHelper.kt              # ACTIVITY_RECOGNITION permission management
-│   │   ├── StepTrackerConfig.kt             # App-wide constants (thresholds, max values)
+│   │   ├── Config.kt                        # App-wide constants (thresholds, max values) - formerly StepTrackerConfig.kt
 │   │   ├── data/
 │   │   │   ├── StepEntity.kt                # Room entity for hourly step records
 │   │   │   ├── StepDao.kt                   # Room DAO with query methods
 │   │   │   ├── StepDatabase.kt              # Room database singleton
 │   │   │   ├── StepRepository.kt            # Data access layer (abstracts DB/preferences)
 │   │   │   └── StepPreferences.kt           # DataStore for caching sensor values
+│   │   ├── notifications/                   # Notification management components
+│   │   │   ├── AlarmScheduler.kt            # AlarmManager scheduling for reminders and hour boundaries
+│   │   │   ├── HourBoundaryReceiver.kt      # BroadcastReceiver for hour boundary processing
+│   │   │   ├── NotificationHelper.kt        # Notification creation and management
+│   │   │   └── StepReminderReceiver.kt      # BroadcastReceiver for step reminder notifications
+│   │   ├── receivers/                       # Broadcast receivers
+│   │   │   └── BootReceiver.kt              # BroadcastReceiver for restarting services after boot
 │   │   ├── sensor/
 │   │   │   └── StepSensorManager.kt         # TYPE_STEP_COUNTER sensor listener
+│   │   ├── services/                        # Background services
+│   │   │   └── StepCounterForegroundService.kt # Foreground service for persistent step tracking
 │   │   ├── worker/
-│   │   │   ├── StepCounterWorker.kt         # WorkManager hourly background job
+│   │   │   ├── StepCounterWorker.kt         # WorkManager background job (currently for cleanup)
 │   │   │   └── WorkManagerScheduler.kt      # WorkManager configuration
 │   │   ├── ui/
 │   │   │   ├── App.kt                       # Navigation scaffold with AppDestinations
 │   │   │   ├── HomeScreen.kt                # Current hour + daily total display
 │   │   │   ├── HistoryScreen.kt             # Hourly breakdown list for the day
-│   │   │   ├── ProfileScreen.kt             # Configuration display (read-only)
+│   │   │   ├── ProfileScreen.kt             # Configuration display with settings toggles
 │   │   │   ├── StepCounterViewModel.kt      # MVVM ViewModel with business logic
 │   │   │   ├── StepCounterViewModelFactory.kt # Factory for DI
 │   │   │   └── theme/
@@ -75,7 +84,7 @@ app/
 
 ## Architecture
 
-The app uses **MVVM architecture with Repository pattern** in a single-activity Jetpack Compose app:
+The app uses **MVVM architecture with Repository pattern** in a single-activity Jetpack Compose app with sophisticated background processing:
 
 ### Presentation Layer (UI)
 1. **MainActivity.kt:** Entry point that handles:
@@ -83,6 +92,7 @@ The app uses **MVVM architecture with Repository pattern** in a single-activity 
    - Runtime permission requests (ACTIVITY_RECOGNITION)
    - ViewModel initialization via factory
    - onResume() hook to refresh step counts when returning from other apps
+   - Manages foreground service based on user preferences
 
 2. **MyHourlyStepCounterV2App() (App.kt):** Root composable that:
    - Manages navigation state using `rememberSaveable`
@@ -92,15 +102,15 @@ The app uses **MVVM architecture with Repository pattern** in a single-activity 
 3. **AppDestinations Enum:** Three navigation destinations:
    - **HOME:** Real-time current hour step count (large display) + daily total (smaller)
    - **HISTORY:** LazyColumn showing hourly breakdown for the day with timestamps
-   - **PROFILE:** Read-only config display (thresholds, max values from StepTrackerConfig)
+   - **PROFILE:** Configuration display with settings toggles (permanent notification, wake-lock)
 
 4. **StepCounterViewModel:** MVVM ViewModel that:
    - Manages UI state via StateFlows (hourlySteps, dailySteps, dayHistory, currentTime)
-   - Coordinates sensor, preferences, repository, and WorkManager
+   - Coordinates sensor, preferences, repository, and background services
    - Handles closure period detection with smart step distribution
    - Detects day boundaries and resets baselines
    - Updates display every second, listens to sensor events
-   - Schedules hour boundary checks for automatic hour transitions
+   - Manages interaction with background services
 
 ### Data Layer
 5. **StepRepository:** Data access abstraction over Room database
@@ -118,6 +128,9 @@ The app uses **MVVM architecture with Repository pattern** in a single-activity 
    - `currentHourTimestamp`: Current hour's start timestamp
    - `lastStartOfDay`: Midnight timestamp for day boundary detection
    - `lastOpenDate`: Timestamp for closure period detection
+   - `permanentNotificationEnabled`: Toggle for persistent notification
+   - `useWakeLock`: Toggle for keeping processor awake
+   - `reminderNotificationEnabled`: Toggle for step reminder notifications
 
 ### Sensor Layer
 8. **StepSensorManager:** Manages TYPE_STEP_COUNTER sensor:
@@ -125,18 +138,37 @@ The app uses **MVVM architecture with Repository pattern** in a single-activity 
    - Detects sensor resets (e.g., when Samsung Health accesses sensor)
    - Maintains hour baseline and calculates delta for current hour
    - Provides StateFlow for reactive UI updates
+   - Thread-safe with Mutex and StateFlow for concurrent access
 
 ### Background Processing
-9. **WorkManager:**
-   - **StepCounterWorker:** Hourly background job that reads sensor and saves to database
-   - **WorkManagerScheduler:** Configures PeriodicWorkRequest (1-hour interval)
+9. **Foreground Service:**
+   - **StepCounterForegroundService:** Maintains persistent notification and continuous step tracking
+   - Updates notification in real-time with current hour and daily totals
+   - Handles hour boundary processing when app is in background
+   - Manages wake-lock based on user preferences
+
+10. **AlarmManager:**
+   - **AlarmScheduler:** Schedules precise alarms for step reminders (XX:50) and hour boundaries (XX:00)
+   - **StepReminderReceiver:** BroadcastReceiver that sends step reminder notifications
+   - **HourBoundaryReceiver:** BroadcastReceiver that processes hour boundaries and saves data
+   - Provides backup scheduling when foreground service isn't running
+
+11. **WorkManager:**
+   - **StepCounterWorker:** Background job for periodic cleanup tasks (database maintenance)
+   - **WorkManagerScheduler:** Configures periodic work requests
    - Handles edge cases: permission denied, sensor reset, stale timestamps
+
+12. **Broadcast Receivers:**
+   - **BootReceiver:** Restarts services and schedules alarms after device reboot
+   - Registered in AndroidManifest.xml to handle system events
 
 ### Key Patterns
 - **Closure Period Handling:** When app reopens after being backgrounded, distributes missed steps intelligently (early morning vs. later in day)
 - **Fallback Priority:** Sensor > DataStore Cache > Safe Default (0)
 - **Data Validation:** Clamps negative deltas to 0, caps unreasonable values at 10,000 steps/hour
 - **Extensive Logging:** Diagnostic logs at every critical decision point for production debugging
+- **Multi-Component Coordination:** Foreground service, AlarmManager, and WorkManager work together for reliable background operation
+- **User Control:** Configurable settings for notification behavior and power management
 
 ## Common Development Tasks
 
