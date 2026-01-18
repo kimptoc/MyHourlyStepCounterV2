@@ -1,8 +1,12 @@
 package com.example.myhourlystepcounterv2
 
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
+import org.junit.Assert.*
 import org.junit.Test
+import org.mockito.Mockito.mock
+import android.content.Context
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
+import org.mockito.Mockito.`when`
 
 /**
  * Test permission handling for ACTIVITY_RECOGNITION sensor access.
@@ -20,7 +24,7 @@ class PermissionTest {
     fun testActivityRecognitionPermissionRequired() {
         // On Android Q (API 29+), ACTIVITY_RECOGNITION is a runtime permission
         // required for TYPE_STEP_COUNTER sensor access
-        val requiredPermission = android.Manifest.permission.ACTIVITY_RECOGNITION
+        val requiredPermission = "android.permission.ACTIVITY_RECOGNITION"
 
         assertTrue("ACTIVITY_RECOGNITION should be defined", requiredPermission.isNotEmpty())
         assertTrue("Permission string should contain ACTIVITY", requiredPermission.contains("ACTIVITY"))
@@ -122,12 +126,5 @@ class PermissionTest {
 
         assertTrue("Log message should be informative", debugLogMessage.contains("permission"))
         assertTrue("Log message should indicate sensor won't work", debugLogMessage.contains("NOT started"))
-    }
-
-    // Helper function
-    private fun assertEquals(message: String, expected: Int, actual: Int) {
-        if (expected != actual) {
-            throw AssertionError("$message: expected $expected but was $actual")
-        }
     }
 }

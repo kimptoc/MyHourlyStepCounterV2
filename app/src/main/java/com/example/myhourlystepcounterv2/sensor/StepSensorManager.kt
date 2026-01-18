@@ -49,6 +49,15 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
                 }
             }
         }
+
+        // For testing purposes only
+        fun setInstance(instance: StepSensorManager) {
+            INSTANCE = instance
+        }
+
+        fun resetInstance() {
+            INSTANCE = null
+        }
     }
 
     fun startListening() {

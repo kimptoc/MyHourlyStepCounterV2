@@ -15,11 +15,11 @@ object AlarmScheduler {
      * Schedule exact alarm at 50 minutes past the current/next hour (XX:50)
      * Uses setExactAndAllowWhileIdle for precise timing even during doze mode
      */
-    fun scheduleStepReminders(context: Context) {
+    fun scheduleStepReminders(context: Context, skipPermissionCheck: Boolean = false) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
 
         // Check if SCHEDULE_EXACT_ALARM permission is granted (Android 12+)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (!skipPermissionCheck && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (!alarmManager.canScheduleExactAlarms()) {
                 android.util.Log.w(
                     "AlarmScheduler",
@@ -97,11 +97,11 @@ object AlarmScheduler {
      * Uses setExactAndAllowWhileIdle for precise timing even during doze mode
      * This ensures the notification resets even when the app is backgrounded
      */
-    fun scheduleHourBoundaryAlarms(context: Context) {
+    fun scheduleHourBoundaryAlarms(context: Context, skipPermissionCheck: Boolean = false) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
 
         // Check if SCHEDULE_EXACT_ALARM permission is granted (Android 12+)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (!skipPermissionCheck && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (!alarmManager.canScheduleExactAlarms()) {
                 android.util.Log.w(
                     "AlarmScheduler",
