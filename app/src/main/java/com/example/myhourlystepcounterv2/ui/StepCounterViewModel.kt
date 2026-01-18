@@ -228,15 +228,23 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
 
                     // CRITICAL FIX: Update current hour baseline after distribution
                     // This ensures subsequent sensor readings calculate correctly
-                    android.util.Log.i("StepCounter", "Post-distribution: Setting current hour baseline to $actualDeviceSteps")
-                    preferences.saveHourData(
-                        hourStartStepCount = actualDeviceSteps,
-                        currentTimestamp = currentHourTimestamp,
-                        totalSteps = actualDeviceSteps
-                    )
-                    sensorManager.setLastHourStartStepCount(actualDeviceSteps)
-                    sensorManager.setLastKnownStepCount(actualDeviceSteps)
-                    sensorManager.markInitialized()
+                    // Only update if we're in a new hour compared to the saved timestamp
+                    val savedHourTimestamp = preferences.currentHourTimestamp.first()
+                    if (currentHourTimestamp != savedHourTimestamp) {
+                        // Hour changed - set new baseline
+                        android.util.Log.i("StepCounter", "Post-distribution: Setting new hour baseline to $actualDeviceSteps (hour changed from ${java.util.Date(savedHourTimestamp)} to ${java.util.Date(currentHourTimestamp)})")
+                        preferences.saveHourData(
+                            hourStartStepCount = actualDeviceSteps,
+                            currentTimestamp = currentHourTimestamp,
+                            totalSteps = actualDeviceSteps
+                        )
+                        sensorManager.setLastHourStartStepCount(actualDeviceSteps)
+                        sensorManager.setLastKnownStepCount(actualDeviceSteps)
+                        sensorManager.markInitialized()
+                    } else {
+                        // Same hour - keep existing baseline to preserve current hour progress
+                        android.util.Log.i("StepCounter", "Post-distribution: Same hour as before - NOT resetting baseline (timestamp: ${java.util.Date(currentHourTimestamp)})")
+                    }
 
                     // Record distribution time for WorkManager coordination
                     preferences.saveLastDistributionTime(System.currentTimeMillis())
@@ -594,14 +602,22 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
             }
 
             // Update current hour baseline after distribution
-            android.util.Log.i("StepCounter", "Post-UI-closure-distribution: Setting current hour baseline to $currentDeviceTotal")
-            preferences.saveHourData(
-                hourStartStepCount = currentDeviceTotal,
-                currentTimestamp = currentHourTimestamp,
-                totalSteps = currentDeviceTotal
-            )
-            sensorManager.setLastHourStartStepCount(currentDeviceTotal)
-            sensorManager.markInitialized()
+            // Only update if we're in a new hour compared to the saved timestamp
+            val savedHourTimestamp = preferences.currentHourTimestamp.first()
+            if (currentHourTimestamp != savedHourTimestamp) {
+                // Hour changed - set new baseline
+                android.util.Log.i("StepCounter", "Post-UI-closure-distribution: Setting new hour baseline to $currentDeviceTotal (hour changed from ${java.util.Date(savedHourTimestamp)} to ${java.util.Date(currentHourTimestamp)})")
+                preferences.saveHourData(
+                    hourStartStepCount = currentDeviceTotal,
+                    currentTimestamp = currentHourTimestamp,
+                    totalSteps = currentDeviceTotal
+                )
+                sensorManager.setLastHourStartStepCount(currentDeviceTotal)
+                sensorManager.markInitialized()
+            } else {
+                // Same hour - keep existing baseline to preserve current hour progress
+                android.util.Log.i("StepCounter", "Post-UI-closure-distribution: Same hour as before - NOT resetting baseline (timestamp: ${java.util.Date(currentHourTimestamp)})")
+            }
 
             // Record distribution time
             preferences.saveLastDistributionTime(System.currentTimeMillis())
