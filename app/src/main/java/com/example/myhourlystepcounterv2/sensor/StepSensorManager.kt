@@ -75,7 +75,7 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
 
         // Skip sensor events during hour transitions to prevent race conditions
         if (_sensorState.value.hourTransitionInProgress) {
-            android.util.Log.d("StepSensor", "Hour transition in progress, deferring sensor event")
+            android.util.Log.d("StepSensor", "Ignoring sensor event during transition: steps=${event.values[0]}")
             return
         }
 
@@ -266,6 +266,8 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
      * Begins an hour transition, blocking sensor events from interfering
      */
     suspend fun beginHourTransition() {
+        val startTime = System.currentTimeMillis()
+        android.util.Log.i("StepSensor", "BEGIN hour transition at ${java.util.Date(startTime)}")
         stateMutex.withLock {
             val currentState = _sensorState.value
             _sensorState.value = currentState.copy(hourTransitionInProgress = true)
@@ -277,6 +279,8 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
      * Ends an hour transition, allowing sensor events to resume
      */
     suspend fun endHourTransition() {
+        val endTime = System.currentTimeMillis()
+        android.util.Log.i("StepSensor", "END hour transition at ${java.util.Date(endTime)}")
         stateMutex.withLock {
             val currentState = _sensorState.value
             _sensorState.value = currentState.copy(hourTransitionInProgress = false)
