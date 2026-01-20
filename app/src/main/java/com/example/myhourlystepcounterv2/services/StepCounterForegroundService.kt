@@ -37,6 +37,11 @@ class StepCounterForegroundService : android.app.Service() {
     private lateinit var preferences: StepPreferences
     private lateinit var repository: com.example.myhourlystepcounterv2.data.StepRepository
 
+    // Health check variables for hour boundary loop
+    private var lastSuccessfulHourBoundary: Long = 0
+    private var consecutiveFailures: Int = 0
+    @Volatile private var hourBoundaryLoopActive: Boolean = false
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
@@ -98,35 +103,8 @@ class StepCounterForegroundService : android.app.Service() {
             }
         }
 
-        // Hour boundary detection - runs continuously while service is active
-        scope.launch {
-            android.util.Log.i("StepCounterFGSvc", "Hour boundary detection coroutine started")
-
-            // Check if we missed any hour boundaries while service was stopped
-            checkMissedHourBoundaries()
-
-            while (true) {
-                val now = java.util.Calendar.getInstance()
-                val nextHour = java.util.Calendar.getInstance().apply {
-                    add(java.util.Calendar.HOUR_OF_DAY, 1)
-                    set(java.util.Calendar.MINUTE, 0)
-                    set(java.util.Calendar.SECOND, 0)
-                    set(java.util.Calendar.MILLISECOND, 0)
-                }
-
-                val delayMs = nextHour.timeInMillis - now.timeInMillis
-                android.util.Log.i(
-                    "StepCounterFGSvc",
-                    "Next hour boundary in ${delayMs}ms at ${nextHour.time} (current: ${now.time})"
-                )
-
-                delay(delayMs)
-
-                // Hour boundary reached - execute logic
-                android.util.Log.i("StepCounterFGSvc", "Hour boundary reached at ${java.util.Calendar.getInstance().time}")
-                handleHourBoundary()
-            }
-        }
+        // Hour boundary detection with multi-layer error recovery
+        startHourBoundaryLoopWithRecovery()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -403,8 +381,147 @@ class StepCounterForegroundService : android.app.Service() {
         }
     }
 
+    /**
+     * Layer 2: Outer restart logic - restarts entire loop if it crashes
+     */
+    private fun startHourBoundaryLoopWithRecovery() {
+        scope.launch {
+            var restartCount = 0
+            val maxRestarts = 10
+
+            while (restartCount < maxRestarts) {
+                try {
+                    startHourBoundaryLoop()
+                    // If we get here, loop was intentionally stopped
+                    android.util.Log.i("StepCounterFGSvc", "Hour boundary loop stopped normally")
+                    break
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    android.util.Log.w("StepCounterFGSvc", "Hour boundary loop cancelled intentionally")
+                    break  // Don't restart if intentionally cancelled
+                } catch (e: Exception) {
+                    restartCount++
+                    android.util.Log.e(
+                        "StepCounterFGSvc",
+                        "❌❌ Hour boundary loop crashed! Restart attempt $restartCount/$maxRestarts",
+                        e
+                    )
+
+                    if (restartCount < maxRestarts) {
+                        // Wait before restarting (exponential backoff)
+                        val backoffMs = minOf(5000L * restartCount, 30000L) // Max 30 seconds
+                        android.util.Log.i("StepCounterFGSvc", "Waiting ${backoffMs}ms before restart")
+                        delay(backoffMs)
+                    }
+                }
+            }
+
+            if (restartCount >= maxRestarts) {
+                android.util.Log.wtf(
+                    "StepCounterFGSvc",
+                    "💀 Hour boundary loop failed $maxRestarts times - GIVING UP. Service needs restart."
+                )
+                hourBoundaryLoopActive = false
+                // TODO: Consider sending notification to user about critical failure
+            }
+        }
+    }
+
+    /**
+     * Layer 1: Inner loop with per-iteration error handling
+     */
+    private suspend fun startHourBoundaryLoop() {
+        android.util.Log.i("StepCounterFGSvc", "Hour boundary detection loop starting")
+        hourBoundaryLoopActive = true
+
+        try {
+            // Check if we missed any hour boundaries while service was stopped
+            try {
+                checkMissedHourBoundaries()
+            } catch (e: Exception) {
+                android.util.Log.e("StepCounterFGSvc", "Error checking missed boundaries (non-fatal)", e)
+                // Continue anyway - non-fatal
+            }
+
+            while (hourBoundaryLoopActive) {
+                try {
+                    val now = java.util.Calendar.getInstance()
+                    val nextHour = java.util.Calendar.getInstance().apply {
+                        add(java.util.Calendar.HOUR_OF_DAY, 1)
+                        set(java.util.Calendar.MINUTE, 0)
+                        set(java.util.Calendar.SECOND, 0)
+                        set(java.util.Calendar.MILLISECOND, 0)
+                    }
+
+                    val delayMs = nextHour.timeInMillis - now.timeInMillis
+                    android.util.Log.i(
+                        "StepCounterFGSvc",
+                        "Next hour boundary in ${delayMs}ms at ${nextHour.time} (current: ${now.time})"
+                    )
+
+                    delay(delayMs)
+
+                    if (!hourBoundaryLoopActive) break  // Check if stopped during delay
+
+                    // Hour boundary reached - execute logic
+                    android.util.Log.i("StepCounterFGSvc", "Hour boundary reached at ${java.util.Calendar.getInstance().time}")
+                    handleHourBoundary()
+                    android.util.Log.i("StepCounterFGSvc", "✅ Hour boundary completed successfully")
+
+                    // Update health check on success
+                    lastSuccessfulHourBoundary = System.currentTimeMillis()
+                    consecutiveFailures = 0
+
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // Coroutine cancelled - propagate to outer handler
+                    android.util.Log.w("StepCounterFGSvc", "Hour boundary loop cancelled")
+                    throw e
+                } catch (e: Exception) {
+                    // Any other exception - log but continue loop
+                    consecutiveFailures++
+                    android.util.Log.e(
+                        "StepCounterFGSvc",
+                        "❌ Hour boundary processing failed (failure #$consecutiveFailures) but loop continues",
+                        e
+                    )
+
+                    // Wait before next iteration to prevent tight error loop
+                    val backoffMs = minOf(60000L * consecutiveFailures, 300000L) // 1-5 minutes
+                    android.util.Log.i("StepCounterFGSvc", "Waiting ${backoffMs}ms before next attempt")
+                    delay(backoffMs)
+                }
+            }
+        } finally {
+            hourBoundaryLoopActive = false
+            android.util.Log.i("StepCounterFGSvc", "Hour boundary detection loop stopped")
+        }
+    }
+
+    /**
+     * Health check for monitoring hour boundary loop status
+     */
+    fun isHourBoundaryLoopHealthy(): Boolean {
+        val timeSinceLastSuccess = System.currentTimeMillis() - lastSuccessfulHourBoundary
+        val maxGapMs = 2 * 60 * 60 * 1000 // 2 hours
+
+        val isHealthy = hourBoundaryLoopActive &&
+                       (lastSuccessfulHourBoundary == 0L || timeSinceLastSuccess < maxGapMs) &&
+                       consecutiveFailures < 3
+
+        if (!isHealthy) {
+            android.util.Log.w(
+                "StepCounterFGSvc",
+                "⚠️ Hour boundary loop UNHEALTHY: active=$hourBoundaryLoopActive, " +
+                "lastSuccess=${if (lastSuccessfulHourBoundary == 0L) "never" else "${timeSinceLastSuccess/1000}s ago"}, " +
+                "failures=$consecutiveFailures"
+            )
+        }
+
+        return isHealthy
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        hourBoundaryLoopActive = false  // Signal loop to stop
         handleWakeLock(false)
         // Don't stop the singleton sensor - ViewModel may still be using it
         scope.cancel()
