@@ -17,7 +17,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
+import kotlin.time.Duration.Companion.seconds
 import com.example.myhourlystepcounterv2.R
 import com.example.myhourlystepcounterv2.data.StepPreferences
 import com.example.myhourlystepcounterv2.StepTrackerConfig
@@ -81,8 +83,10 @@ class StepCounterForegroundService : android.app.Service() {
 
                 android.util.Log.d("StepCounterFGSvc", "Calculated: dbTotal=$dbTotal, currentHour=$currentHourSteps, daily=$dailyTotal")
                 Triple(currentHourSteps, dailyTotal, useWake)
-            }.collect { (currentHourSteps, dailyTotal, useWake) ->
-                android.util.Log.d("StepCounterFGSvc", "Notification update: currentHour=$currentHourSteps, daily=$dailyTotal")
+            }
+            .sample(3.seconds)  // THROTTLE: Only emit once every 3 seconds to prevent notification rate limiting
+            .collect { (currentHourSteps, dailyTotal, useWake) ->
+                android.util.Log.d("StepCounterFGSvc", "Notification update (throttled 3s): currentHour=$currentHourSteps, daily=$dailyTotal")
 
                 // Update notification with correct daily total
                 val notification = buildNotification(currentHourSteps, dailyTotal)
@@ -337,6 +341,27 @@ class StepCounterForegroundService : android.app.Service() {
                 "StepCounterFGSvc",
                 "Processing hour boundary: deviceTotal=$deviceTotal, newHourTimestamp=$currentHourTimestamp (${java.util.Date(currentHourTimestamp)})"
             )
+
+            // Check for day boundary (robust: handles service restarts, timezone changes)
+            val currentStartOfDay = java.util.Calendar.getInstance().apply {
+                set(java.util.Calendar.HOUR_OF_DAY, 0)
+                set(java.util.Calendar.MINUTE, 0)
+                set(java.util.Calendar.SECOND, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+            }.timeInMillis
+
+            val storedStartOfDay = preferences.lastStartOfDay.first()
+
+            // Update lastStartOfDay if: (1) never initialized, or (2) day changed
+            if (storedStartOfDay == 0L || storedStartOfDay != currentStartOfDay) {
+                val message = if (storedStartOfDay == 0L) {
+                    "Initializing lastStartOfDay to ${java.util.Date(currentStartOfDay)}"
+                } else {
+                    "DAY BOUNDARY: Detected day change from ${java.util.Date(storedStartOfDay)} to ${java.util.Date(currentStartOfDay)}"
+                }
+                android.util.Log.i("StepCounterFGSvc", message)
+                preferences.saveStartOfDay(currentStartOfDay)
+            }
 
             // Begin hour transition - blocks sensor events from interfering
             sensorManager.beginHourTransition()
