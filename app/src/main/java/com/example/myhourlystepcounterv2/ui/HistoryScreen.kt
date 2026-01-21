@@ -119,7 +119,7 @@ fun HistoryScreen(
                 )
                 SummaryStatCard(
                     title = "Peak",
-                    value = peakHour?.stepCount.toString(),
+                    value = (peakHour?.stepCount ?: 0).toString(),
                     icon = Icons.Filled.Star,
                     modifier = Modifier.weight(1f)
                 )
@@ -200,8 +200,17 @@ fun ActivityBarChart(
                 modifier = Modifier.padding(bottom = 12.dp)
             )
 
-            history.forEach { step ->
-                val hourFormatter = SimpleDateFormat("h a", Locale.getDefault())
+            history.sortedByDescending { it.timestamp }.forEach { step ->
+                val calendar = java.util.Calendar.getInstance()
+                calendar.timeInMillis = step.timestamp
+                val startHourFormat = java.text.SimpleDateFormat("h", java.util.Locale.getDefault())
+                val endHourFormat = java.text.SimpleDateFormat("h a", java.util.Locale.getDefault())
+                val startHourText = startHourFormat.format(calendar.time)
+                calendar.add(java.util.Calendar.HOUR_OF_DAY, 1)
+                val endHourText = endHourFormat.format(calendar.time)
+
+                val timeRange = "$startHourText-${endHourText.replace(" ", "")}"
+
                 val progress = if (maxSteps > 0) step.stepCount.toFloat() / maxSteps else 0f
                 val activityLevel = getActivityLevel(step.stepCount)
 
@@ -212,9 +221,9 @@ fun ActivityBarChart(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = hourFormatter.format(Date(step.timestamp)),
+                        text = timeRange,
                         style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.width(48.dp),
+                        modifier = Modifier.width(64.dp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     LinearProgressIndicator(
