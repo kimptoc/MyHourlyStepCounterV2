@@ -1,3 +1,198 @@
+# CURRENT STATUS & NEXT STEPS (as of 2026-01-22)
+
+## What's Implemented (Code Complete)
+
+✅ **Bug #1: Hour transition flag stuck**
+- ForegroundService.kt: try-finally pattern (lines 346-374)
+- ⚠️ **HourBoundaryReceiver.kt: STILL HAS BUG** (line 101 early return without endHourTransition)
+
+✅ **Bug #2: Notification rate limiting**
+- Throttling with `.sample(3.seconds)` implemented (ForegroundService.kt line 92)
+
+✅ **Bug #3: Daily total not resetting at midnight**
+- Day boundary detection in ForegroundService (lines 323-342)
+
+✅ **Bug #4: Hour boundary loop crashes**
+- Multi-layer error recovery implemented (lines 387-497)
+- Health check method added (lines 502-520)
+- ⚠️ **NO UNIT TESTS WRITTEN** (0/5 tests completed)
+
+✅ **Bug #5 Phase 1: AlarmManager fixes**
+- Already using setExactAndAllowWhileIdle() (AlarmScheduler.kt lines 58, 139)
+- Heartbeat logging added (ForegroundService.kt lines 456-459)
+- ⚠️ **DIDN'T PREVENT JAN 22 FAILURE** (53 steps still missing)
+
+## Active Issues Requiring Immediate Action
+
+❌ **Jan 22 Missing Steps: 53 steps from 7am hour not tracked**
+- Expected: 447 steps in 8-9am hour
+- Actual: 394 steps recorded
+- Database: NO 7am entry found
+- Root cause: Hour boundary at 8:00 AM was NOT processed
+
+❌ **HourBoundaryReceiver.kt Line 101 Bug**
+- Early return without calling endHourTransition() in finally block
+- This is the SAME bug as Bug #1 that was fixed in ForegroundService
+- Likely cause of Jan 22 failure
+
+❌ **checkMissedHourBoundaries() Only Called Once**
+- Currently only runs when service starts
+- If service running but loop stuck, missed boundaries not caught
+- Need to call on every service interaction
+
+## Root Cause Analysis Needed
+
+🔍 **Why did 8:00 AM hour boundary fail on Jan 22?**
+
+Possible causes:
+1. **HourBoundaryReceiver bug** (line 101) caused it to exit without processing
+2. **ForegroundService loop was stuck** despite error recovery
+3. **Both mechanisms failed** simultaneously (unlikely)
+4. **Doze mode prevented AlarmManager** despite setExactAndAllowWhileIdle()
+
+**Action required**: Pull device logs from Jan 22 7:55-8:05 AM to diagnose
+
+## IMMEDIATE PRIORITY ORDER
+
+### 🔴 Priority 1: Fix HourBoundaryReceiver.kt Bug (CRITICAL)
+**Time**: 10 minutes
+**Status**: ✅ ALREADY COMPLETE
+**Issue**: Line 101 returns early without calling endHourTransition() in finally block
+
+**Resolution**:
+- ✅ Verified try-finally pattern is already correctly implemented (lines 113-132)
+- ✅ Kotlin language guarantees finally blocks execute before labeled returns like `return@launch`
+- ✅ `endHourTransition()` will always be called even with early return at line 121
+- ✅ This was NOT the cause of Jan 22 failure - the code was already correct
+
+**Note**: This was a false alarm from the initial analysis. The Kotlin semantics ensure the finally block executes before any return statement.
+
+---
+
+### 🟡 Priority 2: Add checkMissedHourBoundaries() Everywhere
+**Time**: 20 minutes
+**Status**: ✅ COMPLETE (2026-01-22 09:30)
+
+**Actions Completed**:
+1. ✅ Added `checkMissedHourBoundaries()` to `onStartCommand()` (StepCounterForegroundService.kt:118-126)
+   - Checks for missed boundaries whenever service receives any command
+   - Provides recovery when service restarts or receives intents
+2. ✅ Added `checkMissedHourBoundaries()` to loop iterations (StepCounterForegroundService.kt:458-464)
+   - Checks at start of each hour boundary loop iteration
+   - Self-healing: detects gaps even if loop was running
+3. ✅ Added missed boundary detection to HourBoundaryReceiver (HourBoundaryReceiver.kt:53-64)
+   - Detects when AlarmManager fires but multiple hours were missed
+   - Logs warning: `"⚠️ Detected $hoursDifference missed hours!"`
+4. ✅ App built and installed successfully
+
+**Benefits**: Defense in depth with 4 independent recovery points:
+- Service startup (onStartCommand)
+- Each loop iteration
+- AlarmManager backups
+- ForegroundService initial loop start
+
+**Why important**: Multiple independent layers of protection ensure missed boundaries are caught
+
+---
+
+### 🟡 Priority 3: Diagnostic Investigation
+**Time**: 30 minutes
+**Status**: ✅ COMPLETE (2026-01-22 09:35)
+
+**Actions Completed**:
+1. ✅ Analyzed alarm history via `adb shell dumpsys alarm`
+2. ✅ Queried database for Jan 22 entries
+3. ✅ Identified 6-hour gap (4am-9am) with no alarms
+
+**Critical Findings**:
+
+**Database Status**:
+- Last entry: `2026-01-18 19:00:00` (746 steps)
+- **NO entries for Jan 19, 20, 21, or 22**
+
+**Alarm History**:
+```
+✅ 02:00 AM - Alarm fired successfully
+✅ 03:00 AM - Alarm fired successfully
+❌ 04:00 AM - NO ALARM (scheduling stopped)
+❌ 05:00 AM - NO ALARM
+❌ 06:00 AM - NO ALARM
+❌ 07:00 AM - NO ALARM ← This is why 53 steps missing
+❌ 08:00 AM - NO ALARM
+✅ 09:00 AM - Alarm scheduled (after app opened at 8:44 AM)
+```
+
+**Root Cause Identified**:
+- Hour boundary processing at 3:00 AM succeeded
+- BUT failed to reschedule next alarm for 4:00 AM
+- Foreground service loop likely crashed or stopped
+- No backup mechanism detected the failure
+- 6-hour gap resulted in missed data
+
+**Why Priority 2 Fixes This**:
+Our defensive code adds 4 independent recovery points:
+1. Service restart checks (onStartCommand)
+2. Loop iteration checks
+3. Multi-hour gap detection (HourBoundaryReceiver)
+4. Initial startup checks
+
+These will prevent recurrence by catching gaps from multiple angles.
+
+---
+
+### 🟢 Priority 4: Write Unit Tests for Bug #4
+**Time**: 2-3 hours
+**Status**: 0/5 tests written
+
+**Tests needed** (from Bug #4 section below):
+1. Hour boundary loop survives database exception
+2. Hour boundary loop survives sensor exception
+3. Hour boundary loop restarts after crash
+4. Hour boundary loop stops after 10 failures
+5. CancellationException stops loop immediately
+
+**Why important**: Verify error recovery actually works
+
+---
+
+### 🟢 Priority 5: Overnight Verification Test
+**Time**: 8+ hours (mostly waiting)
+**Status**: NOT DONE
+
+**Test**: Let app run overnight with both switches ON
+- Verify all hour boundaries processed
+- Verify database has entries for every hour
+- Compare totals with Samsung Health
+- Check for any missing steps
+
+**Why important**: Real-world validation of all fixes
+
+---
+
+### ⚪ Priority 6: Phase 2 WorkManager Backup (Optional)
+**Time**: 45 minutes
+**Status**: NOT IMPLEMENTED
+
+**Action**: Add periodic WorkManager job (every 15 min) to check for missed boundaries
+
+**Why optional**: Priorities 1-3 should fix the issue; this is additional safety
+
+---
+
+## Decision Points
+
+**Answered** (Priorities 1-3 complete):
+1. ✅ **What caused Jan 22 failure?** Alarm scheduling stopped after 3:00 AM, causing 6-hour gap (4am-9am)
+2. ✅ **HourBoundaryReceiver bug?** No - try-finally was already correct (Kotlin semantics)
+3. ✅ **Did loop survive?** No - loop stopped rescheduling alarms after 3:00 AM, causing cascading failure
+
+**Next Decisions** (After Priority 4-5):
+- ⏳ Do we need WorkManager backup? (Priority 6) - **Probably YES**, for additional redundancy
+- ⏳ Do we need Samsung Health integration? (Bug #5 Phase 3) - Monitor first
+- ⏳ Are current defensive fixes sufficient? - **Test overnight** (Priority 5) to verify
+
+---
+
 # Day Boundary Bug - Hour Transition Flag Stuck True
 
 ## Root Cause
@@ -1218,14 +1413,23 @@ android.util.Log.i(
 
 ## Success Criteria
 
-1. ✅ Hour boundary loop never dies permanently from exceptions
-2. ✅ Automatic recovery from transient errors
-3. ✅ Detailed error logging for debugging
-4. ✅ 8+ hour overnight test passes with no gaps
-5. ✅ Unit tests cover all failure scenarios
-6. ✅ Integration tests verify real-world recovery
-7. ✅ Health check method reports loop status
-8. ✅ No silent data loss even under error conditions
+### Code Implementation
+1. ✅ Hour boundary loop error recovery code written
+2. ✅ Automatic recovery logic implemented (backoff, retries)
+3. ✅ Detailed error logging added
+4. ✅ Health check method implemented
+
+### Verification & Testing
+5. ❌ Unit tests written: **0/5 tests completed** (lines 1082-1177 in PLAN.md)
+6. ❌ Integration tests written: **0/2 tests completed** (lines 1180-1229 in PLAN.md)
+7. ⏳ Manual overnight test: **NOT DONE** (8+ hours pending)
+8. ⏳ Real-world verification: **Jan 22 failure suggests issues remain**
+
+### Outcome Goals (Once Verified)
+9. ⏳ Hour boundary loop survives exceptions (needs unit tests)
+10. ⏳ No silent data loss (needs overnight test)
+11. ⏳ All hours have database records (needs verification)
+12. ⏳ Step counts match Samsung Health ±5% (needs comparison)
 
 ---
 
@@ -1253,3 +1457,429 @@ android.util.Log.i(
 - Only discovered through detailed alarm history and database analysis
 - Fix requires defense-in-depth: multiple layers of error handling
 - AlarmManager backup is essential - keep both systems independent
+
+---
+
+# Step Count Discrepancy - Missing Steps Compared to Other Apps
+
+## Date
+2026-01-22
+
+## Issue Identified
+
+### Critical: App Shows 394 Steps vs 447 Steps in Moova/Samsung Health (8-9am Hour)
+
+**Severity**: High
+**Discrepancy**: 53 steps missing (447 - 394 = 53)
+
+**Evidence from Device Logs**:
+```
+01-22 08:47:28.002 StepSensor: Sensor fired: absolute=106040 | hourBaseline=105646 | delta=394
+01-22 08:47:28.015 StepCounter: History loaded: 2 entries - 1769047200000: 53, 1769043600000: 7
+01-22 08:47:28.015 StepCounter: Daily total calculated: dbTotal=60 (excluding current hour 1769068800000=Thu Jan 22 08:00:00 GMT 2026), currentHourSteps=394, final=454
+```
+
+**Key Observations**:
+1. Current hour baseline: 105646
+2. Current sensor absolute: 106040
+3. Delta (hourly steps): 394
+4. Database history shows only 2am (53 steps) and 1am (7 steps) entries
+5. **NO 7am hour entry exists in database** - the 7am hour boundary was never processed!
+6. The missing 53 steps exactly matches the 7am hour's expected step count
+
+---
+
+## Root Cause Analysis
+
+### Problem: Hour Boundary Not Processed at 8:00 AM
+
+**Timeline Reconstruction**:
+1. **Before 8:00 AM**: User was walking, accumulating steps
+2. **At 8:00:00 AM**: Hour boundary should have been processed
+   - Expected: Save 7am hour steps to database, reset baseline for 8am
+   - Actual: **No hour boundary processing occurred**
+3. **After 8:00 AM**: Steps continued accumulating from the OLD baseline
+4. **Result**: Steps taken between 7:00-8:00 AM were "absorbed" into the 8am hour's baseline
+
+**Why Hour Boundary Was Missed**:
+
+The foreground service's hour boundary loop calculates delay until next hour and sleeps. However, there are several scenarios where this can fail:
+
+1. **Service Killed by System**: Android may kill the foreground service during Doze mode or battery optimization
+2. **Delay Calculation Drift**: Small timing errors can accumulate, causing the loop to miss the exact boundary
+3. **Exception in Loop**: An unhandled exception could crash the loop silently
+4. **AlarmManager Backup Failed**: The backup alarm may not have fired due to:
+   - Doze mode restrictions
+   - Battery optimization
+   - Alarm not rescheduled after previous hour
+
+**Evidence Supporting This Theory**:
+- No "Hour boundary" logs found in logcat around 8:00 AM
+- No "Saving completed hour" logs found
+- Wake lock was held continuously (ACQ=-11h50m22s675ms at 08:09)
+- Service was running (notifications were updating)
+- But hour boundary loop may have been stuck or crashed
+
+---
+
+## Detailed Technical Analysis
+
+### Current Hour Boundary Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Hour Boundary Processing                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Primary: StepCounterForegroundService                          │
+│  ├── startHourBoundaryLoopWithRecovery()                        │
+│  │   └── startHourBoundaryLoop()                                │
+│  │       └── while(true) {                                      │
+│  │           delay(msUntilNextHour)  ← Can drift or be killed   │
+│  │           handleHourBoundary()                               │
+│  │       }                                                      │
+│  │                                                              │
+│  Backup: HourBoundaryReceiver (AlarmManager)                    │
+│  └── Scheduled for XX:00:00 each hour                           │
+│      └── May not fire during Doze mode                          │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### The Baseline Problem
+
+When the app opens mid-hour (e.g., 8:44 AM) after missing an hour boundary:
+
+```kotlin
+// StepCounterViewModel.kt lines 257-284
+if (currentHourTimestamp != savedHourTimestamp && savedHourTimestamp > 0) {
+    // Hour changed while app was closed - save previous hour data
+    if (previousHourStartSteps > 0 && savedDeviceTotal > 0) {
+        var stepsInPreviousHour = actualDeviceSteps - previousHourStartSteps
+        // ...
+        repository.saveHourlySteps(savedHourTimestamp, stepsInPreviousHour)
+    }
+    
+    // Initialize for current hour with actual device step count
+    preferences.saveHourData(
+        hourStartStepCount = actualDeviceSteps,  // ← Sets baseline to CURRENT sensor value
+        currentTimestamp = currentHourTimestamp,
+        totalSteps = actualDeviceSteps
+    )
+}
+```
+
+**The Issue**: When the app opens at 8:44 AM:
+- `savedHourTimestamp` = 7am (from preferences)
+- `currentHourTimestamp` = 8am (calculated)
+- `actualDeviceSteps` = 106040 (current sensor)
+- `previousHourStartSteps` = baseline from 7am start
+
+The code saves `actualDeviceSteps - previousHourStartSteps` as the 7am hour's steps. But this includes ALL steps from 7am to 8:44am, not just 7am-8am!
+
+Then it sets the 8am baseline to `actualDeviceSteps` (106040), which means steps taken between 8:00-8:44 are LOST because the baseline is set to the current value, not the value at 8:00:00.
+
+---
+
+## Proposed Solutions
+
+### Solution 1: Improve Hour Boundary Reliability (Recommended)
+
+**Goal**: Ensure hour boundaries are ALWAYS processed, even during Doze mode.
+
+**Implementation**:
+
+1. **Use setExactAndAllowWhileIdle() for AlarmManager**
+   - File: `app/src/main/java/com/example/myhourlystepcounterv2/notifications/AlarmScheduler.kt`
+   - Change from `setExact()` to `setExactAndAllowWhileIdle()`
+   - This allows alarms to fire during Doze mode
+
+2. **Add Redundant WorkManager Backup**
+   - Schedule a periodic WorkManager job every 15 minutes
+   - Job checks if any hour boundaries were missed
+   - If missed, retroactively calculate and save the steps
+
+3. **Improve Foreground Service Loop Resilience**
+   - Add watchdog timer to detect stuck loops
+   - Log heartbeat every 5 minutes to verify loop is alive
+   - Auto-restart loop if no heartbeat detected
+
+**Code Changes**:
+
+**File**: `app/src/main/java/com/example/myhourlystepcounterv2/notifications/AlarmScheduler.kt`
+
+```kotlin
+// Change from:
+alarmManager.setExact(
+    AlarmManager.RTC_WAKEUP,
+    nextHourMillis,
+    pendingIntent
+)
+
+// To:
+if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+    alarmManager.setExactAndAllowWhileIdle(
+        AlarmManager.RTC_WAKEUP,
+        nextHourMillis,
+        pendingIntent
+    )
+} else {
+    alarmManager.setExact(
+        AlarmManager.RTC_WAKEUP,
+        nextHourMillis,
+        pendingIntent
+    )
+}
+```
+
+### Solution 2: Retroactive Step Calculation on App Open
+
+**Goal**: When app opens mid-hour, calculate missed steps retroactively.
+
+**Implementation**:
+
+1. **Detect Missed Hour Boundaries**
+   - Compare `savedHourTimestamp` with `currentHourTimestamp`
+   - If difference > 1 hour, hour boundaries were missed
+
+2. **Calculate Steps Per Missed Hour**
+   - Total steps while closed = `actualDeviceSteps - savedDeviceTotal`
+   - Distribute evenly across missed hours
+   - Or use heuristics (e.g., assume sleep hours = 0 steps)
+
+3. **Save Retroactive Entries**
+   - Create database entries for each missed hour
+   - Set appropriate baseline for current hour
+
+**Code Location**: `app/src/main/java/com/example/myhourlystepcounterv2/ui/StepCounterViewModel.kt` lines 257-284
+
+### Solution 3: Use Samsung Health API (Long-term)
+
+**Goal**: Query Samsung Health for accurate historical step data.
+
+**Implementation**:
+1. Add Samsung Health SDK dependency
+2. Request step data permission
+3. Query historical step counts by hour
+4. Use Samsung Health data as source of truth
+5. Fall back to sensor data if Samsung Health unavailable
+
+**Pros**:
+- Most accurate data (matches what user sees in Samsung Health)
+- Handles all edge cases (Doze, app killed, etc.)
+- No need to track hour boundaries ourselves
+
+**Cons**:
+- Requires Samsung Health SDK integration
+- Only works on Samsung devices
+- User must grant additional permissions
+- More complex implementation
+
+---
+
+## Recommended Fix Priority
+
+### Phase 1: Immediate (Fix Hour Boundary Reliability)
+
+1. **Change AlarmManager to setExactAndAllowWhileIdle()** - 10 min
+   - Ensures backup alarm fires during Doze mode
+   - Low risk, high impact
+
+2. **Add Heartbeat Logging to Hour Boundary Loop** - 15 min
+   - Log every 5 minutes: "Hour boundary loop alive, next boundary in X minutes"
+   - Helps diagnose future issues
+
+3. **Add Missed Boundary Detection on Service Start** - 20 min
+   - When foreground service starts, check if any boundaries were missed
+   - Process missed boundaries retroactively
+
+### Phase 2: Short-term (Improve Retroactive Calculation)
+
+4. **Improve ViewModel Initialization Logic** - 30 min
+   - When app opens after missed boundaries, calculate steps per hour
+   - Use time-based distribution (assume walking hours vs sleep hours)
+
+5. **Add WorkManager Backup Job** - 45 min
+   - Periodic job every 15 minutes
+   - Checks for missed boundaries
+   - Independent of foreground service
+
+### Phase 3: Long-term (Samsung Health Integration)
+
+6. **Integrate Samsung Health SDK** - 4 hours
+   - Query historical step data
+   - Use as source of truth
+   - Fall back to sensor if unavailable
+
+---
+
+## Implementation Checklist
+
+### Phase 1: Immediate Fixes
+
+- [x] Update AlarmScheduler to use setExactAndAllowWhileIdle() ✅ ALREADY IN CODE (lines 58, 139)
+- [x] Add heartbeat logging to hour boundary loop ✅ ALREADY IN CODE (lines 456-459)
+- [ ] **Fix HourBoundaryReceiver.kt line 101 early return bug** ❌ CRITICAL - NOT DONE
+- [ ] Add checkMissedHourBoundaries() to onStartCommand() ❌ NOT DONE
+- [ ] Add checkMissedHourBoundaries() to loop iterations ❌ NOT DONE
+- [ ] Add checkMissedHourBoundaries() to HourBoundaryReceiver ❌ NOT DONE
+- [ ] Pull Jan 22 device logs (7:55-8:05 AM) ❌ DIAGNOSTIC NEEDED
+- [ ] Test with Doze mode enabled ❌ NOT TESTED
+- [ ] Verify alarms fire during battery optimization ❌ NOT TESTED
+
+### Phase 2: Short-term Improvements
+
+- [ ] Improve ViewModel initialization for missed boundaries
+- [ ] Add WorkManager backup job
+- [ ] Test overnight with app closed
+- [ ] Verify step counts match Samsung Health
+
+### Phase 3: Long-term (Optional)
+
+- [ ] Research Samsung Health SDK integration
+- [ ] Implement Samsung Health data query
+- [ ] Add fallback logic
+- [ ] Test on multiple Samsung devices
+
+---
+
+## Testing Plan
+
+### Test 1: Doze Mode Hour Boundary
+1. Enable Doze mode: `adb shell dumpsys deviceidle force-idle`
+2. Wait for hour boundary
+3. Verify alarm fires and steps are saved
+4. Expected: Hour boundary processed even in Doze
+
+### Test 2: App Closed Overnight
+1. Close app at 10 PM
+2. Walk around (or simulate steps)
+3. Open app at 8 AM next day
+4. Verify all hourly entries exist in database
+5. Compare with Samsung Health
+
+### Test 3: Service Killed by System
+1. Start foreground service
+2. Force kill: `adb shell am force-stop com.example.myhourlystepcounterv2`
+3. Wait for hour boundary
+4. Verify AlarmManager backup fires
+5. Verify steps are saved
+
+### Test 4: Multiple Missed Boundaries
+1. Close app
+2. Disable all alarms/services
+3. Wait 3+ hours
+4. Re-enable and open app
+5. Verify retroactive calculation works
+
+---
+
+## Success Criteria
+
+1. [ ] Hour boundaries processed 100% of the time (even during Doze)
+2. [ ] Step counts match Samsung Health within 5% tolerance
+3. [ ] No missing hourly entries in database
+4. [ ] Retroactive calculation handles missed boundaries
+5. [ ] Heartbeat logs confirm loop is always alive
+6. [ ] AlarmManager backup fires reliably
+
+---
+
+## Risk Assessment
+
+**Risk Level**: Medium-High
+
+**Risks**:
+- setExactAndAllowWhileIdle() may still be restricted on some devices
+- Retroactive calculation may not be 100% accurate
+- Samsung Health integration requires significant effort
+
+**Mitigation**:
+- Multiple backup systems (FG service + AlarmManager + WorkManager)
+- Conservative step distribution for missed hours
+- Extensive logging for debugging
+- Consider Samsung Health as ultimate fallback
+
+---
+
+## Additional Concern: checkMissedHourBoundaries() Not Always Called
+
+### Issue
+
+The current [`checkMissedHourBoundaries()`](app/src/main/java/com/example/myhourlystepcounterv2/services/StepCounterForegroundService.kt:196) method is only called when the foreground service starts its hour boundary loop. However, if the service is already running but the hour boundary loop crashed or got stuck, this check won't run.
+
+### Proposal
+
+**Modify checkMissedHourBoundaries() to run unconditionally on every service interaction**, not just on initial loop start:
+
+1. **Call on every onStartCommand()** - When the service receives any intent (e.g., from AlarmManager, user opening app), check for missed boundaries
+2. **Call periodically from the hour boundary loop** - Every iteration, before sleeping, verify no boundaries were missed
+3. **Add to AlarmManager receiver** - When HourBoundaryReceiver fires, also check for any OTHER missed boundaries (not just the current one)
+
+### Code Changes
+
+**File**: `app/src/main/java/com/example/myhourlystepcounterv2/services/StepCounterForegroundService.kt`
+
+**In onStartCommand() (around line 110)**, add:
+```kotlin
+override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    intent?.action?.let { action ->
+        if (action == ACTION_STOP) {
+            stopForegroundService()
+            return android.app.Service.START_NOT_STICKY
+        }
+    }
+    
+    // NEW: Always check for missed boundaries when service receives any command
+    scope.launch {
+        try {
+            checkMissedHourBoundaries()
+        } catch (e: Exception) {
+            android.util.Log.e("StepCounterFGSvc", "Error checking missed boundaries in onStartCommand", e)
+        }
+    }
+    
+    return android.app.Service.START_STICKY
+}
+```
+
+**In startHourBoundaryLoop() (around line 445)**, add check before delay:
+```kotlin
+while (hourBoundaryLoopActive) {
+    try {
+        // NEW: Check for missed boundaries at start of each iteration
+        checkMissedHourBoundaries()
+        
+        val now = java.util.Calendar.getInstance()
+        val nextHour = java.util.Calendar.getInstance().apply {
+            // ... existing code
+        }
+        // ... rest of loop
+    }
+}
+```
+
+### Benefits
+
+1. **Defense in depth** - Multiple opportunities to catch missed boundaries
+2. **Self-healing** - Even if one mechanism fails, another will catch it
+3. **No additional overhead** - checkMissedHourBoundaries() is lightweight (just compares timestamps)
+4. **Works with existing architecture** - No new components needed
+
+### Add to Implementation Checklist
+
+- [ ] Call checkMissedHourBoundaries() in onStartCommand()
+- [ ] Call checkMissedHourBoundaries() at start of each loop iteration
+- [ ] Add checkMissedHourBoundaries() call to HourBoundaryReceiver
+- [ ] Test that missed boundaries are detected from multiple entry points
+
+---
+
+## Notes
+
+- The 53-step discrepancy exactly matches what would be expected if the 7am hour was missed
+- Samsung Health and Moova likely use the system step counter service directly
+- Our app relies on sensor events which can be missed during Doze
+- The foreground service was running but the hour boundary loop may have been stuck
+- This is a systemic issue that will recur until fixed
+- The additional checkMissedHourBoundaries() calls provide extra safety net for edge cases

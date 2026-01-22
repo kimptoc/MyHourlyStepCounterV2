@@ -114,6 +114,17 @@ class StepCounterForegroundService : android.app.Service() {
                 return android.app.Service.START_NOT_STICKY
             }
         }
+
+        // Defense in depth: Check for missed boundaries whenever service receives any command
+        scope.launch {
+            try {
+                checkMissedHourBoundaries()
+                android.util.Log.d("StepCounterFGSvc", "onStartCommand: Checked for missed boundaries")
+            } catch (e: Exception) {
+                android.util.Log.e("StepCounterFGSvc", "Error checking missed boundaries in onStartCommand", e)
+            }
+        }
+
         // Keep service running
         return android.app.Service.START_STICKY
     }
@@ -444,6 +455,14 @@ class StepCounterForegroundService : android.app.Service() {
 
             while (hourBoundaryLoopActive) {
                 try {
+                    // Defense in depth: Check for missed boundaries at start of each iteration
+                    try {
+                        checkMissedHourBoundaries()
+                    } catch (e: Exception) {
+                        android.util.Log.e("StepCounterFGSvc", "Error checking missed boundaries in loop iteration (non-fatal)", e)
+                        // Continue anyway - non-fatal
+                    }
+
                     val now = java.util.Calendar.getInstance()
                     val nextHour = java.util.Calendar.getInstance().apply {
                         add(java.util.Calendar.HOUR_OF_DAY, 1)

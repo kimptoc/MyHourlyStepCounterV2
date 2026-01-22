@@ -39,9 +39,29 @@ class HourBoundaryReceiver : BroadcastReceiver() {
                 val database = StepDatabase.getDatabase(context.applicationContext)
                 val repository = StepRepository(database.stepDao())
 
+                // Calculate current hour timestamp
+                val currentHourTimestamp = Calendar.getInstance().apply {
+                    set(Calendar.MINUTE, 0)
+                    set(Calendar.SECOND, 0)
+                    set(Calendar.MILLISECOND, 0)
+                }.timeInMillis
+
                 // Get the PREVIOUS hour's data that needs to be saved
                 val previousHourTimestamp = preferences.currentHourTimestamp.first()
                 val previousHourStartStepCount = preferences.hourStartStepCount.first()
+
+                // Defense in depth: Check if we missed multiple hour boundaries
+                if (previousHourTimestamp > 0 && previousHourTimestamp < currentHourTimestamp) {
+                    val hoursDifference = (currentHourTimestamp - previousHourTimestamp) / (60 * 60 * 1000)
+                    if (hoursDifference > 1) {
+                        android.util.Log.w(
+                            "HourBoundary",
+                            "⚠️ Detected $hoursDifference missed hours! Last saved: ${java.util.Date(previousHourTimestamp)}, current: ${java.util.Date(currentHourTimestamp)}"
+                        )
+                        // Continue to save what we can with the data we have
+                        // The foreground service's checkMissedHourBoundaries() will handle distribution if needed
+                    }
+                }
 
                 // Get current device total from sensor (or fallback to preferences)
                 val currentDeviceTotal = sensorManager.getCurrentTotalSteps()
@@ -76,13 +96,6 @@ class HourBoundaryReceiver : BroadcastReceiver() {
                     "Saving completed hour: timestamp=$previousHourTimestamp, steps=$stepsInPreviousHour (device=$deviceTotal - baseline=$previousHourStartStepCount)"
                 )
                 repository.saveHourlySteps(previousHourTimestamp, stepsInPreviousHour)
-
-                // Calculate current hour timestamp
-                val currentHourTimestamp = Calendar.getInstance().apply {
-                    set(Calendar.MINUTE, 0)
-                    set(Calendar.SECOND, 0)
-                    set(Calendar.MILLISECOND, 0)
-                }.timeInMillis
 
                 android.util.Log.i(
                     "HourBoundary",
