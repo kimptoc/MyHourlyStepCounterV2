@@ -1,3 +1,413 @@
+# CRITICAL BUG FOUND (2026-01-23)
+
+## Bug #6: Foreground Service Loses Steps When Killed by OS - Missing Multi-Hour Distribution
+
+**Date Discovered**: 2026-01-23 08:36 AM
+**Severity**: CRITICAL - Major Data Loss
+**Status**: ❌ NOT FIXED
+
+### Issue Summary
+
+When the foreground service is killed by the OS and restarts hours later, it detects missed hour boundaries but **only saves ONE incomplete hour**, discarding all steps from the other missed hours. This results in significant data loss.
+
+### Real-World Impact
+
+**User Report**: Notification showing "0 steps current hour, 40 total for day" while other apps (Samsung Health, Moova) show "356 total for day, 300+ current hour"
+
+**Missing Steps**: ~316 steps lost from 4 AM to 8:36 AM
+
+### Evidence from Device Logs
+
+```
+01-23 08:36:31.091 W StepCounterFGSvc: Service restart detected: missed 5 hour boundaries.
+   Last saved hour: Fri Jan 23 03:00:00 GMT 2026,
+   current hour: Fri Jan 23 08:00:00 GMT 2026
+
+01-23 08:36:31.095 I StepSensor: resetForNewHour: Baseline set to 117584 (was 0), display reset to 0
+
+01-23 08:36:31.112 D StepCounterFGSvc: Calculated: dbTotal=40, currentHour=0, daily=40
+```
+
+**Timeline of Failure**:
+1. **3:00 AM**: Service processing normally
+2. **3:00-8:36 AM**: Service killed by OS (battery optimization, memory pressure, or Doze mode)
+3. **8:36 AM**: User opens app, service restarts
+4. **Detection**: Service detects 5 missed hour boundaries (3→4→5→6→7→8 AM)
+5. **Problem**: `checkMissedHourBoundaries()` only saves the LAST incomplete hour (3 AM)
+6. **Result**: All steps from 4 AM, 5 AM, 6 AM, 7 AM are LOST
+7. **Baseline Reset**: Sets new baseline to current sensor value (117,584), discarding ~316 accumulated steps
+
+### Root Cause Analysis
+
+**Location**: `app/src/main/java/com/example/myhourlystepcounterv2/services/StepCounterForegroundService.kt:207-277`
+
+**The Fatal Flaw in `checkMissedHourBoundaries()`**:
+
+```kotlin
+// Lines 217-246: Only processes ONE hour
+if (hoursDifference > 0) {
+    android.util.Log.w(
+        "StepCounterFGSvc",
+        "Service restart detected: missed $hoursDifference hour boundaries. " +
+                "Last saved hour: ${java.util.Date(savedHourTimestamp)}, " +
+                "current hour: ${java.util.Date(currentHourTimestamp)}"
+    )
+
+    // ❌ PROBLEM: Only saves the LAST incomplete hour
+    val currentDeviceTotal = sensorManager.getCurrentTotalSteps()
+    val previousHourStartSteps = preferences.hourStartStepCount.first()
+
+    if (currentDeviceTotal > 0 && previousHourStartSteps > 0) {
+        var stepsInPreviousHour = currentDeviceTotal - previousHourStartSteps
+
+        // Saves only the PREVIOUS hour (e.g., 3 AM)
+        repository.saveHourlySteps(savedHourTimestamp, stepsInPreviousHour)
+    }
+
+    // ❌ Then immediately resets to current hour, losing ALL steps from hours 4-7
+    sensorManager.resetForNewHour(currentDeviceTotal)
+    preferences.saveHourData(
+        hourStartStepCount = currentDeviceTotal,  // Sets baseline to NOW
+        currentTimestamp = currentHourTimestamp,
+        totalSteps = currentDeviceTotal
+    )
+}
+```
+
+**What Should Happen**:
+- Detect 5 missed boundaries (3→4→5→6→7→8 AM)
+- Calculate total steps accumulated during downtime
+- **Distribute steps across ALL 5 missed hours** (like closure period handling does)
+- Save individual records for each missed hour
+- Set baseline for current hour
+
+**What Actually Happens**:
+- Detect 5 missed boundaries ✅
+- Calculate steps in hour 3 only ✅
+- Save hour 3 to database ✅
+- **Discard hours 4, 5, 6, 7 entirely** ❌
+- Reset baseline, losing all accumulated steps ❌
+
+### Comparison with Existing Closure Period Logic
+
+**Good Example**: `StepCounterViewModel.kt:439-525` already handles this correctly for app closure:
+
+```kotlin
+// When app reopens after being closed
+val hoursDifference = (currentHourTimestamp - lastOpenDate) / (60 * 60 * 1000)
+
+if (hoursDifference > 1) {
+    // CORRECTLY distributes steps across multiple missed hours
+    val totalStepsWhileClosed = actualDeviceSteps - previousDeviceSteps
+    val stepsPerHour = totalStepsWhileClosed / hoursDifference.toInt()
+
+    // Saves a record for EACH missed hour
+    for (hour in 0 until hoursDifference.toInt()) {
+        val hourTimestamp = Calendar.getInstance().apply {
+            timeInMillis = lastOpenDate
+            set(Calendar.HOUR_OF_DAY, threshold + hour)
+            // ...
+        }.timeInMillis
+
+        repository.saveHourlySteps(hourTimestamp, stepsPerHour.coerceIn(0, MAX_STEPS_PER_HOUR))
+    }
+}
+```
+
+### Proposed Fix
+
+**Strategy**: Implement multi-hour distribution logic in `checkMissedHourBoundaries()` similar to closure period handling.
+
+**Implementation Steps**:
+
+#### Step 1: Detect All Missed Hours
+
+```kotlin
+private suspend fun checkMissedHourBoundaries() {
+    try {
+        val currentHourTimestamp = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+
+        val savedHourTimestamp = preferences.currentHourTimestamp.first()
+
+        if (savedHourTimestamp > 0 && savedHourTimestamp < currentHourTimestamp) {
+            val hoursDifference = (currentHourTimestamp - savedHourTimestamp) / (60 * 60 * 1000)
+
+            if (hoursDifference > 0) {
+                android.util.Log.w(
+                    "StepCounterFGSvc",
+                    "Service restart detected: missed $hoursDifference hour boundaries. " +
+                            "Last saved hour: ${java.util.Date(savedHourTimestamp)}, " +
+                            "current hour: ${java.util.Date(currentHourTimestamp)}"
+                )
+
+                // NEW: Handle multi-hour gap
+                if (hoursDifference == 1L) {
+                    // Single missed hour - save directly
+                    saveSingleMissedHour(savedHourTimestamp)
+                } else {
+                    // Multiple missed hours - distribute steps
+                    distributeStepsAcrossMissedHours(savedHourTimestamp, currentHourTimestamp, hoursDifference.toInt())
+                }
+
+                // Reset for current hour
+                resetToCurrentHour(currentHourTimestamp)
+            }
+        }
+    } catch (e: Exception) {
+        android.util.Log.e("StepCounterFGSvc", "Error checking missed hour boundaries", e)
+    }
+}
+```
+
+#### Step 2: Distribute Steps Across Missed Hours
+
+```kotlin
+private suspend fun distributeStepsAcrossMissedHours(
+    savedHourTimestamp: Long,
+    currentHourTimestamp: Long,
+    hourCount: Int
+) {
+    val currentDeviceTotal = sensorManager.getCurrentTotalSteps()
+    val previousHourStartSteps = preferences.hourStartStepCount.first()
+
+    if (currentDeviceTotal <= 0 || previousHourStartSteps <= 0) {
+        android.util.Log.w("StepCounterFGSvc", "Cannot distribute - missing sensor data")
+        return
+    }
+
+    val totalStepsWhileDown = currentDeviceTotal - previousHourStartSteps
+
+    if (totalStepsWhileDown <= 0) {
+        android.util.Log.i("StepCounterFGSvc", "No steps taken during downtime")
+        return
+    }
+
+    android.util.Log.i(
+        "StepCounterFGSvc",
+        "Distributing $totalStepsWhileDown steps across $hourCount missed hours"
+    )
+
+    // Determine distribution strategy based on time of day
+    val calendar = java.util.Calendar.getInstance()
+    calendar.timeInMillis = savedHourTimestamp
+    val startHour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
+
+    // If downtime started before MORNING_THRESHOLD (e.g., 10 AM), assume sleep hours
+    if (startHour < StepTrackerConfig.MORNING_THRESHOLD_HOUR) {
+        // Early morning - assume most steps are recent (waking up)
+        // Put all steps in the hour just before current hour
+        val lastMissedHour = currentHourTimestamp - (60 * 60 * 1000)
+
+        android.util.Log.i(
+            "StepCounterFGSvc",
+            "Early morning downtime detected - attributing steps to last hour before wake: ${java.util.Date(lastMissedHour)}"
+        )
+
+        repository.saveHourlySteps(
+            lastMissedHour,
+            totalStepsWhileDown.coerceIn(0, StepTrackerConfig.MAX_STEPS_PER_HOUR)
+        )
+
+        // Save 0 for other hours
+        for (i in 1 until hourCount) {
+            val hourTimestamp = savedHourTimestamp + (i * 60 * 60 * 1000)
+            if (hourTimestamp < lastMissedHour) {
+                repository.saveHourlySteps(hourTimestamp, 0)
+            }
+        }
+    } else {
+        // Daytime downtime - distribute evenly
+        val stepsPerHour = totalStepsWhileDown / hourCount
+
+        android.util.Log.i(
+            "StepCounterFGSvc",
+            "Distributing evenly: ~$stepsPerHour steps per hour"
+        )
+
+        for (i in 1..hourCount) {
+            val hourTimestamp = savedHourTimestamp + (i * 60 * 60 * 1000)
+
+            // Don't save for current hour (will be tracked live)
+            if (hourTimestamp < currentHourTimestamp) {
+                val steps = stepsPerHour.coerceIn(0, StepTrackerConfig.MAX_STEPS_PER_HOUR)
+
+                android.util.Log.i(
+                    "StepCounterFGSvc",
+                    "Saving missed hour: ${java.util.Date(hourTimestamp)} -> $steps steps"
+                )
+
+                repository.saveHourlySteps(hourTimestamp, steps)
+            }
+        }
+    }
+}
+```
+
+#### Step 3: Single Hour Helper
+
+```kotlin
+private suspend fun saveSingleMissedHour(savedHourTimestamp: Long) {
+    val currentDeviceTotal = sensorManager.getCurrentTotalSteps()
+    val previousHourStartSteps = preferences.hourStartStepCount.first()
+
+    if (currentDeviceTotal > 0 && previousHourStartSteps > 0) {
+        var stepsInPreviousHour = currentDeviceTotal - previousHourStartSteps
+
+        // Validate
+        if (stepsInPreviousHour < 0) {
+            stepsInPreviousHour = 0
+        } else if (stepsInPreviousHour > StepTrackerConfig.MAX_STEPS_PER_HOUR) {
+            stepsInPreviousHour = StepTrackerConfig.MAX_STEPS_PER_HOUR
+        }
+
+        android.util.Log.i(
+            "StepCounterFGSvc",
+            "Saving single missed hour: timestamp=$savedHourTimestamp, steps=$stepsInPreviousHour"
+        )
+        repository.saveHourlySteps(savedHourTimestamp, stepsInPreviousHour)
+    }
+}
+```
+
+#### Step 4: Reset Helper
+
+```kotlin
+private suspend fun resetToCurrentHour(currentHourTimestamp: Long) {
+    val currentDeviceTotal = sensorManager.getCurrentTotalSteps()
+
+    // Begin hour transition - blocks sensor events from interfering
+    sensorManager.beginHourTransition()
+
+    try {
+        // Reset sensor for new hour (updates display to 0)
+        val resetSuccessful = sensorManager.resetForNewHour(currentDeviceTotal)
+
+        if (!resetSuccessful) {
+            android.util.Log.w("StepCounterFGSvc", "Baseline already set, skipping duplicate reset")
+            return
+        }
+
+        // Update preferences with new hour baseline
+        preferences.saveHourData(
+            hourStartStepCount = currentDeviceTotal,
+            currentTimestamp = currentHourTimestamp,
+            totalSteps = currentDeviceTotal
+        )
+
+        // Reset notification flags for new hour
+        preferences.saveReminderSentThisHour(false)
+        preferences.saveAchievementSentThisHour(false)
+
+        android.util.Log.i(
+            "StepCounterFGSvc",
+            "Reset to current hour: baseline=$currentDeviceTotal, timestamp=$currentHourTimestamp"
+        )
+    } finally {
+        // End hour transition - resume sensor events
+        sensorManager.endHourTransition()
+    }
+}
+```
+
+### Benefits of Proposed Fix
+
+1. **Prevents Data Loss**: All steps are preserved, not discarded
+2. **Smart Distribution**: Uses time-of-day heuristics (early morning vs daytime)
+3. **Consistent with ViewModel**: Matches closure period handling logic
+4. **Validated Data**: Clamps to MAX_STEPS_PER_HOUR to prevent anomalies
+5. **Comprehensive Logging**: Tracks every decision for debugging
+
+### Testing Plan
+
+#### Test 1: Service Killed Overnight
+1. Enable foreground service
+2. Force stop app at 11 PM: `adb shell am force-stop com.example.myhourlystepcounterv2`
+3. Walk around at 7 AM (or simulate steps)
+4. Open app at 8 AM
+5. **Expected**:
+   - Database has entries for all hours (12 AM, 1 AM, 2 AM, ..., 7 AM)
+   - Steps distributed appropriately (sleep hours = fewer steps, wake hours = more)
+   - Daily total matches other apps
+
+#### Test 2: Mid-Day Service Kill
+1. Enable foreground service at 10 AM
+2. Force stop at 11 AM
+3. Walk around
+4. Restart at 3 PM (missed 4 hours)
+5. **Expected**:
+   - Steps distributed evenly across 11 AM, 12 PM, 1 PM, 2 PM
+   - Each hour shows ~same step count
+   - Total matches Samsung Health
+
+#### Test 3: Single Hour Miss
+1. Enable foreground service
+2. Force stop at 2:05 PM
+3. Restart at 3:05 PM
+4. **Expected**:
+   - Single hour (2 PM) saved correctly
+   - No distribution logic triggered
+   - Matches existing behavior
+
+#### Test 4: Early Morning Downtime
+1. Force stop at 2 AM
+2. Restart at 9 AM
+3. **Expected**:
+   - Hours 2-8 AM show 0 or minimal steps (sleep)
+   - Most steps attributed to 8-9 AM hour (waking up)
+   - Smart distribution applied
+
+### Implementation Checklist
+
+- [ ] Extract `checkMissedHourBoundaries()` distribution logic to separate methods
+- [ ] Implement `distributeStepsAcrossMissedHours()`
+- [ ] Implement `saveSingleMissedHour()`
+- [ ] Implement `resetToCurrentHour()`
+- [ ] Add time-of-day logic (MORNING_THRESHOLD)
+- [ ] Add comprehensive logging for each distribution decision
+- [ ] Test single hour miss (no distribution)
+- [ ] Test multi-hour miss during day (even distribution)
+- [ ] Test multi-hour miss overnight (smart distribution)
+- [ ] Verify with real device logs
+- [ ] Compare daily totals with Samsung Health
+- [ ] Update CLAUDE.md with new behavior
+
+### Success Criteria
+
+1. ✅ No steps lost when service is killed by OS
+2. ✅ Multi-hour gaps result in individual hour records for each missed hour
+3. ✅ Distribution logic matches closure period handling
+4. ✅ Daily totals match other apps within 5%
+5. ✅ Logs show clear distribution decisions
+6. ✅ Overnight downtime handled intelligently (sleep hours vs wake hours)
+
+### Risk Assessment
+
+**Risk Level**: Medium
+
+**Risks**:
+- Distribution logic may not perfectly match actual walking patterns
+- Time-of-day heuristics may misattribute steps
+- Edge case: Service killed exactly at hour boundary
+
+**Mitigation**:
+- Use conservative estimates (err on side of lower step counts)
+- Clamp to MAX_STEPS_PER_HOUR to prevent anomalies
+- Extensive logging to verify distribution decisions
+- Compare with other apps for validation
+- Fall back to even distribution if uncertain
+
+### Priority
+
+**CRITICAL - Should be fixed immediately**
+
+This is a data integrity bug that affects all users who have the foreground service enabled. It's even more critical than the hour boundary loop crashes because it silently loses data without any visible error.
+
+---
+
 # CURRENT STATUS & NEXT STEPS (as of 2026-01-22)
 
 ## What's Implemented (Code Complete)
@@ -1559,7 +1969,7 @@ if (currentHourTimestamp != savedHourTimestamp && savedHourTimestamp > 0) {
         // ...
         repository.saveHourlySteps(savedHourTimestamp, stepsInPreviousHour)
     }
-    
+
     // Initialize for current hour with actual device step count
     preferences.saveHourData(
         hourStartStepCount = actualDeviceSteps,  // ← Sets baseline to CURRENT sensor value
@@ -1829,7 +2239,7 @@ override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
             return android.app.Service.START_NOT_STICKY
         }
     }
-    
+
     // NEW: Always check for missed boundaries when service receives any command
     scope.launch {
         try {
@@ -1838,7 +2248,7 @@ override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
             android.util.Log.e("StepCounterFGSvc", "Error checking missed boundaries in onStartCommand", e)
         }
     }
-    
+
     return android.app.Service.START_STICKY
 }
 ```
@@ -1849,7 +2259,7 @@ while (hourBoundaryLoopActive) {
     try {
         // NEW: Check for missed boundaries at start of each iteration
         checkMissedHourBoundaries()
-        
+
         val now = java.util.Calendar.getInstance()
         val nextHour = java.util.Calendar.getInstance().apply {
             // ... existing code

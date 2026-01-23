@@ -10,6 +10,7 @@ import com.example.myhourlystepcounterv2.data.StepDatabase
 import com.example.myhourlystepcounterv2.notifications.HourBoundaryReceiver
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService
 import com.example.myhourlystepcounterv2.sensor.StepSensorManager
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -123,7 +124,7 @@ class HourBoundaryCoordinationTest {
         // Then
         // Verify that only one write succeeded (atomic DAO should handle this)
         val savedSteps = runBlocking {
-            stepRepository.getStepsForDay(getStartOfDay()).first()
+            stepRepository.getStepsForDay(getStartOfDay(), System.currentTimeMillis()).first()
         }
 
         // Check that the data is consistent and no corruption occurred
@@ -184,7 +185,7 @@ class HourBoundaryCoordinationTest {
         // Then
         // Verify that atomic operations prevented data corruption
         val savedSteps = runBlocking {
-            stepRepository.getStepsForDay(getStartOfDay()).first()
+            stepRepository.getStepsForDay(getStartOfDay(), System.currentTimeMillis()).first()
         }
 
         // The atomic DAO should ensure data consistency

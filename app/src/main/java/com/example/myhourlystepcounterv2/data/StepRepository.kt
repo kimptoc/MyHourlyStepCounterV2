@@ -12,8 +12,8 @@ class StepRepository(private val stepDao: StepDao) {
         return stepDao.getStepForHour(timestamp)
     }
 
-    fun getStepsForDay(startOfDay: Long): Flow<List<StepEntity>> {
-        return stepDao.getStepsForDay(startOfDay)
+    fun getStepsForDay(startOfDay: Long, currentHourTimestamp: Long): Flow<List<StepEntity>> {
+        return stepDao.getStepsForDay(startOfDay, currentHourTimestamp)
     }
 
     fun getTotalStepsForDay(startOfDay: Long): Flow<Int?> {

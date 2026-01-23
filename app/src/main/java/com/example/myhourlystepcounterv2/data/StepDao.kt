@@ -15,8 +15,8 @@ interface StepDao {
     @Query("SELECT * FROM hourly_steps WHERE timestamp = :timestamp")
     suspend fun getStepForHour(timestamp: Long): StepEntity?
 
-    @Query("SELECT * FROM hourly_steps WHERE timestamp >= :startOfDay ORDER BY timestamp DESC")
-    fun getStepsForDay(startOfDay: Long): Flow<List<StepEntity>>
+    @Query("SELECT * FROM hourly_steps WHERE timestamp >= :startOfDay AND timestamp < :currentHourTimestamp ORDER BY timestamp DESC")
+    fun getStepsForDay(startOfDay: Long, currentHourTimestamp: Long): Flow<List<StepEntity>>
 
     @Query("DELETE FROM hourly_steps WHERE timestamp < :cutoffTime")
     suspend fun deleteOldSteps(cutoffTime: Long)

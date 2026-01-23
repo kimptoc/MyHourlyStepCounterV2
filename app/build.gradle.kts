@@ -80,20 +80,37 @@ dependencies {
     // DataStore for preferences
     implementation(libs.androidx.datastore.preferences)
 
+    // Dependencies for both local unit tests and instrumentation tests
     testImplementation(libs.junit)
+    androidTestImplementation(libs.junit)
     testImplementation(libs.mockito.core)
+    androidTestImplementation(libs.mockito.core)
     testImplementation(libs.mockito.kotlin)
+    androidTestImplementation(libs.mockito.kotlin)
     testImplementation(libs.coroutines.test)
+    androidTestImplementation(libs.coroutines.test)
     testImplementation(libs.androidx.test.core)
-    testImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.core)
     testImplementation(libs.androidx.room.testing)
-    testImplementation(libs.androidx.work.testing)
-    testImplementation("org.robolectric:robolectric:4.11")
+    androidTestImplementation(libs.androidx.room.testing)
 
-    androidTestImplementation(libs.androidx.junit)
+
+    // Dependencies only for local unit tests
+    testImplementation(libs.androidx.test.runner) // For Robolectric
+    testImplementation("org.robolectric:robolectric:4.11")
+    testImplementation(libs.androidx.work.testing) // Can be here if only for local tests
+
+
+    // Dependencies only for instrumentation tests
+    androidTestImplementation(libs.androidx.junit) // androidx.test.ext:junit
+    androidTestImplementation(libs.androidx.test.runner) // androidx.test:runner
+    androidTestImplementation(libs.androidx.test.rules) // Add this for ActivityTestRule
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation(libs.androidx.work.testing) // Also needed here for on-device worker tests
+
+
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

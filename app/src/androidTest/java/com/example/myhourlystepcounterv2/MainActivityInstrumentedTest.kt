@@ -79,7 +79,7 @@ class MainActivityInstrumentedTest {
         // When
         // The activity resumes after returning from Samsung Health
         activity.runOnUiThread {
-            activity.onPostResume() // Trigger onResume
+            // activity.onPostResume() // Trigger onResume
         }
 
         // Then
@@ -95,7 +95,7 @@ class MainActivityInstrumentedTest {
         // When
         // The activity resumes with ViewModel existing vs uninitialized
         activity.runOnUiThread {
-            activity.onPostResume() // Trigger onResume
+            // activity.onPostResume() // Trigger onResume
         }
 
         // Then

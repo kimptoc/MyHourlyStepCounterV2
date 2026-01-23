@@ -408,13 +408,23 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
             }
         }
 
-        // Observe day history (database entries for today)
+        // Observe day history (database entries for today, excluding current hour)
         viewModelScope.launch {
-            preferences.lastStartOfDay.flatMapLatest { storedStartOfDay ->
+            combine(
+                preferences.lastStartOfDay,
+                preferences.currentHourTimestamp
+            ) { storedStartOfDay, currentHourTimestamp ->
                 val effectiveStartOfDay = if (storedStartOfDay > 0) storedStartOfDay else getStartOfDay()
-                repository.getStepsForDay(effectiveStartOfDay)
+                Pair(effectiveStartOfDay, currentHourTimestamp)
+            }.flatMapLatest { (effectiveStartOfDay, currentHourTimestamp) ->
+                // Query now excludes the current hour
+                repository.getStepsForDay(effectiveStartOfDay, currentHourTimestamp)
             }.collect { steps ->
-                android.util.Log.d("StepCounter", "History loaded: ${steps.size} entries - ${steps.map { "${it.timestamp}: ${it.stepCount}" }.joinToString(", ")}")
+                android.util.Log.d(
+                    "StepCounter",
+                    "History loaded (past hours): ${steps.size} entries - " +
+                            steps.map { "${java.util.Date(it.timestamp)}: ${it.stepCount}" }.joinToString(", ")
+                )
                 _dayHistory.value = steps
             }
         }

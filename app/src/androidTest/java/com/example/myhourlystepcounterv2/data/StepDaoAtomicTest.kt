@@ -124,7 +124,7 @@ class StepDaoAtomicTest {
         assertEquals(stepCount, result?.stepCount)
 
         // Verify transaction completed successfully by checking the data is persisted
-        val allSteps = dao.getStepsForDay(getStartOfDay()).first()
+        val allSteps = dao.getStepsForDay(getStartOfDay(), timestamp + 1).first()
         assert(allSteps.isNotEmpty())
     }
 
@@ -139,7 +139,7 @@ class StepDaoAtomicTest {
         dao.insertStep(StepEntity(timestamp = timestamp, stepCount = stepCount))
 
         // When
-        val stepsFlow = dao.getStepsForDay(startOfDay)
+        val stepsFlow = dao.getStepsForDay(startOfDay, timestamp + 1)
 
         // Then
         val result = stepsFlow.first()
