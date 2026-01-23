@@ -4,7 +4,10 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.example.myhourlystepcounterv2.AppDestination
+import com.example.myhourlystepcounterv2.ui.AppDestinations
+import com.example.myhourlystepcounterv2.ui.MyHourlyStepCounterV2App
+import com.example.myhourlystepcounterv2.ui.StepCounterViewModel
+import com.example.myhourlystepcounterv2.data.StepRepository
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -18,13 +21,18 @@ class AppNavigationTest {
     @Test
     fun testAppNavigation_navigationStatePersistence_rememberSaveablePreservesStateAcrossConfigChanges() {
         // Given
-        var selectedDestination = AppDestination.HOME
+        var selectedDestination = AppDestinations.HOME
 
         // When
         composeTestRule.setContent {
-            MyApp(
-                selectedDestination = selectedDestination,
-                onNavigate = { destination -> selectedDestination = destination }
+            MyHourlyStepCounterV2App(
+                viewModel = StepCounterViewModel(
+                    StepRepository(
+                        com.example.myhourlystepcounterv2.data.StepDatabase.getDatabase(
+                            androidx.test.core.app.ApplicationProvider.getApplicationContext()
+                        ).stepDao()
+                    )
+                )
             )
         }
 
@@ -36,7 +44,7 @@ class AppNavigationTest {
     @Test
     fun testAppNavigation_appDestinationsEnum_allThreeDestinationsAccessible_HOME_HISTORY_PROFILE() {
         // Given
-        val destinations = listOf(AppDestination.HOME, AppDestination.HISTORY, AppDestination.PROFILE)
+        val destinations = listOf(AppDestinations.HOME, AppDestinations.HISTORY, AppDestinations.PROFILE)
 
         // When & Then
         destinations.forEach { destination ->
@@ -48,13 +56,18 @@ class AppNavigationTest {
     @Test
     fun testAppNavigation_navigationSuiteScaffold_rendersAllNavItemsCorrectly() {
         // Given
-        val selectedDestination = AppDestination.HOME
+        val selectedDestination = AppDestinations.HOME
 
         // When
         composeTestRule.setContent {
-            MyApp(
-                selectedDestination = selectedDestination,
-                onNavigate = {}
+            MyHourlyStepCounterV2App(
+                viewModel = StepCounterViewModel(
+                    StepRepository(
+                        com.example.myhourlystepcounterv2.data.StepDatabase.getDatabase(
+                            androidx.test.core.app.ApplicationProvider.getApplicationContext()
+                        ).stepDao()
+                    )
+                )
             )
         }
 
@@ -66,13 +79,18 @@ class AppNavigationTest {
     @Test
     fun testAppNavigation_screenSwitching_homeToHistoryToProfileToHomeNavigationWorks() {
         // Given
-        var selectedDestination = AppDestination.HOME
+        var selectedDestination = AppDestinations.HOME
 
         // When
         composeTestRule.setContent {
-            MyApp(
-                selectedDestination = selectedDestination,
-                onNavigate = { destination -> selectedDestination = destination }
+            MyHourlyStepCounterV2App(
+                viewModel = StepCounterViewModel(
+                    StepRepository(
+                        com.example.myhourlystepcounterv2.data.StepDatabase.getDatabase(
+                            androidx.test.core.app.ApplicationProvider.getApplicationContext()
+                        ).stepDao()
+                    )
+                )
             )
         }
 
@@ -85,13 +103,18 @@ class AppNavigationTest {
     fun testAppNavigation_viewModelInitialization_launchedEffectInitializesViewModelOnce() {
         // Given
         var viewModelInitCount = 0
-        val selectedDestination = AppDestination.HOME
+        val selectedDestination = AppDestinations.HOME
 
         // When
         composeTestRule.setContent {
-            MyApp(
-                selectedDestination = selectedDestination,
-                onNavigate = {}
+            MyHourlyStepCounterV2App(
+                viewModel = StepCounterViewModel(
+                    StepRepository(
+                        com.example.myhourlystepcounterv2.data.StepDatabase.getDatabase(
+                            androidx.test.core.app.ApplicationProvider.getApplicationContext()
+                        ).stepDao()
+                    )
+                )
             )
         }
 
@@ -103,13 +126,18 @@ class AppNavigationTest {
     @Test
     fun testAppNavigation_applicationContext_verifyApplicationContextPassed_notActivityContext() {
         // Given
-        val selectedDestination = AppDestination.HOME
+        val selectedDestination = AppDestinations.HOME
 
         // When
         composeTestRule.setContent {
-            MyApp(
-                selectedDestination = selectedDestination,
-                onNavigate = {}
+            MyHourlyStepCounterV2App(
+                viewModel = StepCounterViewModel(
+                    StepRepository(
+                        com.example.myhourlystepcounterv2.data.StepDatabase.getDatabase(
+                            androidx.test.core.app.ApplicationProvider.getApplicationContext()
+                        ).stepDao()
+                    )
+                )
             )
         }
 

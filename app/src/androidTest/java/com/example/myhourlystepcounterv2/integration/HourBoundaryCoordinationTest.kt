@@ -170,7 +170,7 @@ class HourBoundaryCoordinationTest {
                     var stepsInPreviousHour = currentDeviceTotal - previousHourStartSteps
                     if (stepsInPreviousHour < 0) stepsInPreviousHour = 0
 
-                    stepRepository.saveHourlyStepsAtomic(previousHourTimestamp, stepsInPreviousHour)
+                    stepRepository.saveHourlySteps(previousHourTimestamp, stepsInPreviousHour)
                 }
             }
             threads.add(thread)

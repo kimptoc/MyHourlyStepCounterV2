@@ -21,7 +21,7 @@ class StepPreferencesComprehensiveTest {
 
     @Before
     fun setUp() {
-        val context = ApplicationProvider.getApplicationContext()
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         preferences = StepPreferences(context)
     }
 
@@ -148,7 +148,7 @@ class StepPreferencesComprehensiveTest {
 
         // When
         // Launch multiple coroutines to read/write simultaneously
-        repeat(iterations) { i ->
+        for (i in 0 until iterations) {
             // Write operation
             preferences.saveHourData(
                 hourStartStepCount = i * 2,
@@ -159,7 +159,7 @@ class StepPreferencesComprehensiveTest {
 
         // Then
         // Verify the final state is consistent
-        val finalHourStartStepCount = preferences.hourStartStepCount.first()
+        val finalHourStartStepCount: Int = preferences.hourStartStepCount.first()
         assertTrue(finalHourStartStepCount >= 0) // Should be positive
     }
 
