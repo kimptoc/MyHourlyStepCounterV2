@@ -72,6 +72,9 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
         // Schedule the hourly work
         WorkManagerScheduler.scheduleHourlyStepCounter(context)
 
+        // Schedule the hour boundary check work as a backup
+        WorkManagerScheduler.scheduleHourBoundaryCheck(context)
+
         // Initialize sensor manager with current sensor reading
         viewModelScope.launch {
             // Wait for sensor to provide actual reading with extended timeout
@@ -256,19 +259,60 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
 
                 // Check if we're in a new hour since last session
                 if (currentHourTimestamp != savedHourTimestamp && savedHourTimestamp > 0) {
-                    // Hour changed while app was closed - save previous hour data
-                    if (previousHourStartSteps > 0 && savedDeviceTotal > 0) {
-                        var stepsInPreviousHour = actualDeviceSteps - previousHourStartSteps
+                    // Check for multiple missed hour boundaries
+                    val hoursDifference = (currentHourTimestamp - savedHourTimestamp) / (60 * 60 * 1000)
 
-                        // Validate
-                        if (stepsInPreviousHour < 0) {
-                            stepsInPreviousHour = 0
-                        } else if (stepsInPreviousHour > 10000) {
-                            stepsInPreviousHour = 10000
+                    if (hoursDifference > 1) {
+                        // Multiple hour boundaries were missed - handle retroactively
+                        android.util.Log.w(
+                            "StepCounter",
+                            "MISSED HOUR BOUNDARIES DETECTED: $hoursDifference hours missed. " +
+                                    "Last saved: ${java.util.Date(savedHourTimestamp)}, " +
+                                    "Current: ${java.util.Date(currentHourTimestamp)}"
+                        )
+
+                        // Calculate total steps taken while app was closed
+                        val totalStepsWhileClosed = actualDeviceSteps - savedDeviceTotal
+
+                        if (totalStepsWhileClosed > 0) {
+                            // Distribute steps across missed hours
+                            val stepsPerHour = totalStepsWhileClosed / hoursDifference.toInt()
+
+                            // Save steps for each missed hour
+                            var currentHourStart = savedHourTimestamp
+                            for (i in 0 until hoursDifference.toInt()) {
+                                if (i < hoursDifference.toInt() - 1) {  // Don't process the current hour
+                                    val stepsForHour = minOf(stepsPerHour, StepTrackerConfig.MAX_STEPS_PER_HOUR)
+
+                                    // Skip hours that are in the future (shouldn't happen but just in case)
+                                    if (currentHourStart < currentHourTimestamp) {
+                                        repository.saveHourlySteps(currentHourStart, stepsForHour)
+                                        android.util.Log.d(
+                                            "StepCounter",
+                                            "Retroactively saved $stepsForHour steps for hour: ${java.util.Date(currentHourStart)}"
+                                        )
+                                    }
+
+                                    // Move to next hour
+                                    currentHourStart += (60 * 60 * 1000)
+                                }
+                            }
                         }
+                    } else {
+                        // Single hour boundary was missed - handle normally
+                        if (previousHourStartSteps > 0 && savedDeviceTotal > 0) {
+                            var stepsInPreviousHour = actualDeviceSteps - previousHourStartSteps
 
-                        repository.saveHourlySteps(savedHourTimestamp, stepsInPreviousHour)
-                        android.util.Log.d("StepCounter", "App startup: Saved $stepsInPreviousHour steps for previous hour")
+                            // Validate
+                            if (stepsInPreviousHour < 0) {
+                                stepsInPreviousHour = 0
+                            } else if (stepsInPreviousHour > 10000) {
+                                stepsInPreviousHour = 10000
+                            }
+
+                            repository.saveHourlySteps(savedHourTimestamp, stepsInPreviousHour)
+                            android.util.Log.d("StepCounter", "App startup: Saved $stepsInPreviousHour steps for previous hour")
+                        }
                     }
 
                     // Initialize for current hour with actual device step count

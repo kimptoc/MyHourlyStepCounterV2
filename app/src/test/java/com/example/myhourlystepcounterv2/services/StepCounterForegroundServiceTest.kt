@@ -43,7 +43,7 @@ import java.util.Calendar
 @Config(sdk = [33])
 class StepCounterForegroundServiceTest {
 
-    private lateinit var serviceController: org.robolectric.android.controller.ServiceController<StepCounterForegroundService>
+    private lateinit var serviceController: ServiceController<StepCounterForegroundService>
     private lateinit var service: StepCounterForegroundService
     private lateinit var context: Context
     private lateinit var shadowNotificationManager: ShadowNotificationManager

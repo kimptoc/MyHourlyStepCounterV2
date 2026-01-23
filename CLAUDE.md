@@ -413,3 +413,55 @@ object StepTrackerConfig {
 1. **Display Update Frequency:** Spec requires 3-second step count updates, but implementation uses event-driven sensor + 1-second clock. Monitor if current behavior is acceptable or needs throttling adjustment.
 2. **Documentation Maintenance:** Keep CLAUDE.md updated as architecture evolves to prevent future drift.
 3. **Optional: Deprecation Warnings:** Consider updating ProfileScreen to use `HorizontalDivider` instead of deprecated `Divider`.
+
+---
+
+## Session Summary: Service Behavior Specification Clarification
+
+### Key Decisions Made
+
+1. **Clarify Service Restart Behavior:** When the foreground service is killed by the OS and restarts hours later, it detects missed hour boundaries and saves the accumulated steps to the last missed hour. This preserves the total step count but attributes all missed steps to a single hour. This is the intended behavior to maintain data integrity while simplifying the logic. The total daily step count remains accurate, which is the primary goal.
+
+2. **Document Current Approach Benefits:** The current approach ensures that all steps taken during downtime are preserved, uses simple implementation logic that's easy to maintain, maintains accurate daily totals, and provides robust recovery from service restarts.
+
+3. **Acknowledge Trade-offs:** Recognize that the current approach trades hourly granularity for simplicity - steps from multiple missed hours are attributed to a single hour, and individual hour records may not reflect actual hourly activity.
+
+### Code Patterns Established
+
+- **Preserve Total Accuracy:** Prioritize maintaining accurate total daily step counts over perfect hourly distribution.
+- **Simple Recovery Logic:** Use straightforward logic for handling service restarts after being killed by the OS.
+- **Data Integrity Focus:** Ensure no steps are lost during service interruptions, even if distribution across hours is not optimal.
+
+### Next Steps Identified
+
+1. **Monitor User Feedback:** Watch for user reports about hourly step distribution accuracy after service interruptions.
+2. **Consider Future Enhancements:** Evaluate if more sophisticated step distribution algorithms are needed based on user needs.
+3. **Maintain Current Behavior:** Continue using the current approach as it meets the primary requirement of preserving total step counts.
+
+---
+
+## Session Summary: Enhanced Missed Boundary Detection Implementation
+
+### Key Decisions Made
+
+1. **Implement Defense in Depth:** Added multiple recovery points to ensure missed hour boundaries are detected and handled even if one mechanism fails. The system now checks for missed boundaries in three independent locations.
+
+2. **Multi-Point Detection Strategy:** Implemented missed boundary detection at:
+   - Service startup (`onStartCommand()` in `StepCounterForegroundService`)
+   - Each loop iteration (in the hour boundary loop)
+   - AlarmManager backups (`HourBoundaryReceiver`)
+
+3. **Self-Healing Architecture:** The system now automatically detects and recovers from missed hour boundaries through multiple independent pathways, providing redundancy and reliability.
+
+### Code Patterns Established
+
+- **Defense in Depth:** Multiple independent recovery points ensure missed boundaries are caught from different angles.
+- **Non-Blocking Error Handling:** Each detection point uses try-catch to ensure failures don't break the main functionality.
+- **Clear Logging:** Comprehensive logging at each detection point for debugging and monitoring.
+- **Self-Healing:** Automatic recovery mechanisms that continue operation even after failures.
+
+### Next Steps Identified
+
+1. **Monitor Effectiveness:** Observe how well the multi-point detection handles real-world scenarios where services are killed by the OS.
+2. **Performance Impact:** Monitor battery usage and performance to ensure multiple checks don't negatively impact the user experience.
+3. **Log Analysis:** Review logs to verify that missed boundaries are being detected and handled appropriately across all three points.
