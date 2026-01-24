@@ -465,3 +465,86 @@ object StepTrackerConfig {
 1. **Monitor Effectiveness:** Observe how well the multi-point detection handles real-world scenarios where services are killed by the OS.
 2. **Performance Impact:** Monitor battery usage and performance to ensure multiple checks don't negatively impact the user experience.
 3. **Log Analysis:** Review logs to verify that missed boundaries are being detected and handled appropriately across all three points.
+
+---
+
+## Session Summary: Multi-Layer Error Recovery and Health Monitoring
+
+### Key Decisions Made
+
+1. **Implement Multi-Layer Error Recovery:** Added two-tier error handling in the hour boundary processing loop:
+   - **Layer 1 (Inner Loop):** Per-iteration error handling that catches exceptions within each hour boundary processing cycle but keeps the loop running
+   - **Layer 2 (Outer Loop):** Restart mechanism that recreates the entire loop if it crashes, with exponential backoff and failure limits
+
+2. **Add Health Monitoring:** Implemented health check mechanisms to monitor the status of the hour boundary processing:
+   - `lastSuccessfulHourBoundary`: Tracks the timestamp of the last successful boundary processing
+   - `consecutiveFailures`: Counts consecutive failures to detect stuck loops
+   - `hourBoundaryLoopActive`: Volatile flag to track if the loop is actively running
+   - `isHourBoundaryLoopHealthy()`: Public method to check if the loop is functioning properly
+
+3. **Implement WorkManager Backup:** Added `HourBoundaryCheckWorker` that runs every 15 minutes as an additional safety net to detect and process any missed hour boundaries that weren't caught by the foreground service or AlarmManager.
+
+### Code Patterns Established
+
+- **Multi-Layer Error Handling:** Separate error handling for individual iterations vs. complete loop failures
+- **Graceful Degradation:** Exponential backoff delays (1-5 minutes) to prevent tight error loops
+- **Failure Limits:** Maximum of 10 restart attempts before giving up to prevent infinite restart cycles
+- **Special Cancellation Handling:** CancellationException is treated specially and stops the loop without triggering restarts
+- **Comprehensive Logging:** Detailed logging for successes, failures, restarts, and health checks
+- **Redundant Safety Nets:** Multiple independent systems (FG Service + AlarmManager + WorkManager) to ensure coverage
+
+### Next Steps Identified
+
+1. **Monitor Health Metrics:** Use the health check methods to monitor service reliability in production
+2. **Analyze Failure Patterns:** Review logs to understand common failure modes and refine error handling
+3. **Battery Impact Assessment:** Monitor the impact of additional checks and logging on battery life
+4. **Verify Backup Effectiveness:** Ensure the WorkManager backup effectively catches boundaries missed by primary systems
+
+---
+
+## Session Summary: Notification Rate Limiting Prevention
+
+### Key Decisions Made
+
+1. **Implement Throttling:** Added `.sample(3.seconds)` operator to the notification update flow to limit updates to once every 3 seconds, preventing Android's notification rate limiting errors.
+
+2. **Preserve Real-Time UI:** Keep the main UI (HomeScreen) updating in real-time via ViewModel while only throttling the background notification service.
+
+3. **Maintain Spec Compliance:** The 3-second throttle aligns with the spec requirement: "display should update every 3 seconds with the latest step total."
+
+### Code Patterns Established
+
+- **Flow Throttling:** Use Kotlin Coroutines Flow's `sample()` operator for efficient rate limiting
+- **Separate Update Paths:** Different update frequencies for UI (real-time) vs. notifications (throttled)
+- **Rate Limit Prevention:** Proactive throttling to avoid Android system limitations
+
+### Next Steps Identified
+
+1. **Monitor Notification Performance:** Verify that throttled notifications still provide adequate user feedback
+2. **Battery Usage Monitoring:** Assess the impact of the new flow architecture on battery consumption
+3. **User Experience Validation:** Confirm that 3-second notification updates meet user expectations
+
+---
+
+## Session Summary: Enhanced ViewModel Initialization for Missed Boundaries
+
+### Key Decisions Made
+
+1. **Improved Missed Boundary Detection:** Enhanced the ViewModel initialization logic to better detect when multiple hour boundaries were missed while the app was closed. The system now calculates the difference between the saved hour timestamp and current hour timestamp to identify multiple missed boundaries.
+
+2. **Retroactive Step Distribution:** When multiple hour boundaries are detected as missed, the system now distributes the total steps taken during the closure period across the missed hours proportionally, rather than attributing all steps to a single hour.
+
+3. **Robust Boundary Processing:** Added checks to ensure that when the app resumes after being closed for extended periods, it properly handles the closure period by retroactively saving steps to appropriate hours and setting correct baselines for ongoing tracking.
+
+### Code Patterns Established
+
+- **Time-Based Distribution:** Distribute steps proportionally across missed hours based on time difference
+- **Validation Checks:** Clamp step values to reasonable limits (MAX_STEPS_PER_HOUR) to prevent anomalies
+- **Future-Proofing:** Skip hours that might be in the future (validation check) to prevent invalid entries
+- **Baseline Preservation:** Maintain correct step count baselines to ensure ongoing accuracy after retroactive processing
+
+### Next Steps Identified
+
+1. **Validate Distribution Logic:** Monitor real-world usage to ensure step distribution across missed hours is reasonable
+2. **Performance Monitoring:** Assess the impact of enhanced initialization logic on app startup time
+3. **Edge Case Testing:** Verify the logic handles unusual scenarios (very long closure periods, system time changes, etc.)
