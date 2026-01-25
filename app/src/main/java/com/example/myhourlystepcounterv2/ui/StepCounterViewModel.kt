@@ -154,7 +154,21 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
 
                 if (isFirstOpenOfDay) {
                     // First open of this day - handle closure period with smart distribution
-                    val stepsWhileClosed = actualDeviceSteps - savedDeviceTotal
+                    // CRITICAL: Validate savedDeviceTotal before using it
+                    val validSavedDeviceTotal = if (savedDeviceTotal == 0 && previousHourStartSteps > 0) {
+                        // savedDeviceTotal is 0 but we have a baseline - this is the bug condition
+                        // Use the baseline as a safer fallback
+                        android.util.Log.w(
+                            "StepCounter",
+                            "DETECTED BUG: savedDeviceTotal=0 but hourStartStepCount=$previousHourStartSteps. " +
+                                    "Using hourStartStepCount as fallback to prevent data loss."
+                        )
+                        previousHourStartSteps
+                    } else {
+                        savedDeviceTotal
+                    }
+
+                    val stepsWhileClosed = actualDeviceSteps - validSavedDeviceTotal
                     val currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
                     val isEarlyMorning = currentHour < StepTrackerConfig.MORNING_THRESHOLD_HOUR
 
@@ -272,7 +286,19 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                         )
 
                         // Calculate total steps taken while app was closed
-                        val totalStepsWhileClosed = actualDeviceSteps - savedDeviceTotal
+                        // CRITICAL: Validate savedDeviceTotal before using it
+                        val validSavedDeviceTotal = if (savedDeviceTotal == 0 && previousHourStartSteps > 0) {
+                            android.util.Log.w(
+                                "StepCounter",
+                                "DETECTED BUG in missed boundaries logic: savedDeviceTotal=0 but hourStartStepCount=$previousHourStartSteps. " +
+                                        "Using hourStartStepCount as fallback."
+                            )
+                            previousHourStartSteps
+                        } else {
+                            savedDeviceTotal
+                        }
+
+                        val totalStepsWhileClosed = actualDeviceSteps - validSavedDeviceTotal
 
                         if (totalStepsWhileClosed > 0) {
                             // Distribute steps across missed hours
@@ -328,7 +354,19 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                     android.util.Log.d("StepCounter", "App startup: Set sensor manager - hour start = $actualDeviceSteps, known total = $actualDeviceSteps")
                 } else {
                     // Same hour as last session
-                    val stepsWhileAppWasClosed = actualDeviceSteps - savedDeviceTotal
+                    // CRITICAL: Validate savedDeviceTotal before using it
+                    val validSavedDeviceTotal = if (savedDeviceTotal == 0 && previousHourStartSteps > 0) {
+                        android.util.Log.w(
+                            "StepCounter",
+                            "DETECTED BUG in same-hour logic: savedDeviceTotal=0 but hourStartStepCount=$previousHourStartSteps. " +
+                                    "Using hourStartStepCount as fallback."
+                        )
+                        previousHourStartSteps
+                    } else {
+                        savedDeviceTotal
+                    }
+
+                    val stepsWhileAppWasClosed = actualDeviceSteps - validSavedDeviceTotal
 
                     if (stepsWhileAppWasClosed > 10 && previousHourStartSteps > 0) {
                         // App was closed in the same hour and steps were taken

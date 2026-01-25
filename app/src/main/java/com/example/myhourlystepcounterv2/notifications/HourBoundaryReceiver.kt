@@ -69,12 +69,18 @@ class HourBoundaryReceiver : BroadcastReceiver() {
 
                 val deviceTotal = if (currentDeviceTotal > 0) {
                     currentDeviceTotal
-                } else {
+                } else if (fallbackTotal > 0) {
                     android.util.Log.w(
                         "HourBoundary",
                         "Sensor returned 0, using preferences fallback: $fallbackTotal"
                     )
                     fallbackTotal
+                } else {
+                    android.util.Log.e(
+                        "HourBoundary",
+                        "CRITICAL: Both sensor and preferences returned 0. Cannot process hour boundary safely. Aborting."
+                    )
+                    return@launch
                 }
 
                 // Calculate steps in the PREVIOUS hour (that just ended)

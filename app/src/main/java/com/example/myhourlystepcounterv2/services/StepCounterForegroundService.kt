@@ -228,6 +228,7 @@ class StepCounterForegroundService : android.app.Service() {
                     // Save the incomplete hour with current steps (best effort)
                     val currentDeviceTotal = sensorManager.getCurrentTotalSteps()
                     val previousHourStartSteps = preferences.hourStartStepCount.first()
+                    val savedDeviceTotal = preferences.totalStepsDevice.first()
 
                     if (currentDeviceTotal > 0 && previousHourStartSteps > 0) {
                         var stepsInPreviousHour = currentDeviceTotal - previousHourStartSteps
@@ -246,28 +247,55 @@ class StepCounterForegroundService : android.app.Service() {
                         repository.saveHourlySteps(savedHourTimestamp, stepsInPreviousHour)
                     }
 
-                    // Reset for current hour
+                    // Reset for current hour - but ONLY if sensor is actually initialized
+                    // If currentDeviceTotal is 0 but we have a savedDeviceTotal, the sensor hasn't fired yet
+                    val deviceTotalToUse = if (currentDeviceTotal > 0) {
+                        currentDeviceTotal
+                    } else if (savedDeviceTotal > 0) {
+                        android.util.Log.w(
+                            "StepCounterFGSvc",
+                            "Sensor not initialized yet (currentDeviceTotal=0), using fallback savedDeviceTotal=$savedDeviceTotal"
+                        )
+                        savedDeviceTotal
+                    } else {
+                        android.util.Log.e(
+                            "StepCounterFGSvc",
+                            "CRITICAL: Both currentDeviceTotal and savedDeviceTotal are 0. Cannot reset hour baseline safely. Skipping saveHourData."
+                        )
+                        0
+                    }
+
                     sensorManager.beginHourTransition()
                     try {
-                        val resetSuccessful = sensorManager.resetForNewHour(currentDeviceTotal)
-                        if (resetSuccessful) {
-                            preferences.saveHourData(
-                                hourStartStepCount = currentDeviceTotal,
-                                currentTimestamp = currentHourTimestamp,
-                                totalSteps = currentDeviceTotal
-                            )
+                        // Only save if we have a valid device total
+                        if (deviceTotalToUse > 0) {
+                            val resetSuccessful = sensorManager.resetForNewHour(deviceTotalToUse)
+                            if (resetSuccessful) {
+                                preferences.saveHourData(
+                                    hourStartStepCount = deviceTotalToUse,
+                                    currentTimestamp = currentHourTimestamp,
+                                    totalSteps = deviceTotalToUse
+                                )
 
-                            // Reset notification flags for new hour
-                            preferences.saveReminderSentThisHour(false)
-                            preferences.saveAchievementSentThisHour(false)
-
-                            android.util.Log.i(
+                                android.util.Log.i(
+                                    "StepCounterFGSvc",
+                                    "Reset to current hour: baseline=$deviceTotalToUse, timestamp=$currentHourTimestamp"
+                                )
+                            }
+                        } else {
+                            android.util.Log.w(
                                 "StepCounterFGSvc",
-                                "Reset to current hour: baseline=$currentDeviceTotal, timestamp=$currentHourTimestamp"
+                                "Skipping hour reset - waiting for valid sensor reading"
                             )
                         }
                     } finally {
                         sensorManager.endHourTransition()
+                    }
+
+                    // Reset notification flags even if we couldn't save hour data
+                    if (deviceTotalToUse > 0) {
+                        preferences.saveReminderSentThisHour(false)
+                        preferences.saveAchievementSentThisHour(false)
                     }
                 }
             }
