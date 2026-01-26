@@ -92,6 +92,10 @@ class StepReminderReceiver : BroadcastReceiver() {
         // Get current hourly step count from shared singleton sensor
         val sensorManager = StepSensorManager.getInstance(context)
 
+        // Wait briefly to allow any pending sensor events to process
+        // This ensures we get the most recent value, especially when waking from Doze mode
+        kotlinx.coroutines.delay(500)
+
         // Read current step count from singleton (already initialized by ViewModel)
         val currentHourSteps = sensorManager.currentStepCount.first()
 
@@ -141,6 +145,10 @@ class StepReminderReceiver : BroadcastReceiver() {
 
         // Get current hourly step count from shared singleton sensor
         val sensorManager = StepSensorManager.getInstance(context)
+
+        // Wait briefly to allow any pending sensor events to process
+        // This ensures we get the most recent value, especially when waking from Doze mode
+        kotlinx.coroutines.delay(500)
 
         // Read current step count from singleton (already initialized by ViewModel)
         val currentHourSteps = sensorManager.currentStepCount.first()
