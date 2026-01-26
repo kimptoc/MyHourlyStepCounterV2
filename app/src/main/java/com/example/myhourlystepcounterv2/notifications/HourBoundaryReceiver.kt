@@ -14,20 +14,89 @@ import com.example.myhourlystepcounterv2.data.StepDatabase
 import com.example.myhourlystepcounterv2.sensor.StepSensorManager
 import java.util.Calendar
 
-class HourBoundaryReceiver : BroadcastReceiver() {
+class HourBoundaryReceiver(
+    private var stepPreferences: StepPreferences? = null
+) : BroadcastReceiver() {
     companion object {
         const val ACTION_HOUR_BOUNDARY = "com.example.myhourlystepcounterv2.ACTION_HOUR_BOUNDARY"
+        const val ACTION_BOUNDARY_CHECK = "com.example.myhourlystepcounterv2.ACTION_BOUNDARY_CHECK"
     }
 
     override fun onReceive(context: Context, intent: Intent) {
-        android.util.Log.i("HourBoundary", "onReceive called! action=${intent.action}, expected=$ACTION_HOUR_BOUNDARY")
+        android.util.Log.i("HourBoundary", "onReceive called! action=${intent.action}")
 
-        if (intent.action != ACTION_HOUR_BOUNDARY) {
-            android.util.Log.w("HourBoundary", "Wrong action received, ignoring")
-            return
+        if (stepPreferences == null) {
+            stepPreferences = StepPreferences(context.applicationContext)
         }
 
-        android.util.Log.i("HourBoundary", "Hour boundary alarm triggered at ${Calendar.getInstance().time}")
+        when (intent.action) {
+            ACTION_HOUR_BOUNDARY -> {
+                android.util.Log.i("HourBoundary", "Hour boundary alarm triggered at ${Calendar.getInstance().time}")
+                processHourBoundary(context)
+            }
+            ACTION_BOUNDARY_CHECK -> {
+                android.util.Log.i("HourBoundary", "Boundary check alarm triggered at ${Calendar.getInstance().time}")
+                checkForMissedBoundaries(context)
+            }
+            else -> {
+                android.util.Log.w("HourBoundary", "Unknown action received: ${intent.action}, ignoring")
+                return
+            }
+        }
+    }
+
+    /**
+     * Periodic check to detect and process missed hour boundaries
+     * This is a backup safety net that runs every 15 minutes
+     */
+    private fun checkForMissedBoundaries(context: Context) {
+        val pendingResult = goAsync()
+
+        CoroutineScope(Dispatchers.Default + SupervisorJob()).launch {
+            try {
+                val preferences = stepPreferences ?: StepPreferences(context.applicationContext)
+                val previousHourTimestamp = preferences.currentHourTimestamp.first()
+
+                // Calculate current hour timestamp
+                val currentHourTimestamp = Calendar.getInstance().apply {
+                    set(Calendar.MINUTE, 0)
+                    set(Calendar.SECOND, 0)
+                    set(Calendar.MILLISECOND, 0)
+                }.timeInMillis
+
+                // Check if we're past the saved hour
+                if (previousHourTimestamp > 0 && previousHourTimestamp < currentHourTimestamp) {
+                    val hoursDifference = (currentHourTimestamp - previousHourTimestamp) / (60 * 60 * 1000)
+
+                    android.util.Log.w(
+                        "HourBoundary",
+                        "🔍 CHECK: Detected $hoursDifference missed hour(s)! Last saved: ${java.util.Date(previousHourTimestamp)}, current: ${java.util.Date(currentHourTimestamp)}"
+                    )
+
+                    // Trigger hour boundary processing
+                    processHourBoundary(context, isBackupCheck = true)
+                } else {
+                    android.util.Log.d(
+                        "HourBoundary",
+                        "✓ CHECK: No missed boundaries. Current hour: ${java.util.Date(currentHourTimestamp)}, saved: ${java.util.Date(previousHourTimestamp)}"
+                    )
+                }
+
+                // Reschedule next check in 15 minutes
+                AlarmScheduler.scheduleBoundaryCheckAlarm(context.applicationContext)
+            } catch (e: Exception) {
+                android.util.Log.e("HourBoundary", "Error checking for missed boundaries", e)
+            } finally {
+                pendingResult.finish()
+            }
+        }
+    }
+
+    /**
+     * Process the hour boundary transition
+     */
+    private fun processHourBoundary(context: Context, isBackupCheck: Boolean = false) {
+        android.util.Log.i("HourBoundary", if (isBackupCheck) "Processing missed boundary (backup check)" else "Processing hour boundary (scheduled)")
 
         // Use goAsync() to extend BroadcastReceiver lifecycle for coroutine work
         val pendingResult = goAsync()
@@ -35,7 +104,7 @@ class HourBoundaryReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.Default + SupervisorJob()).launch {
             try {
                 val sensorManager = StepSensorManager.getInstance(context.applicationContext)
-                val preferences = StepPreferences(context.applicationContext)
+                val preferences = stepPreferences ?: StepPreferences(context.applicationContext)
                 val database = StepDatabase.getDatabase(context.applicationContext)
                 val repository = StepRepository(database.stepDao())
 

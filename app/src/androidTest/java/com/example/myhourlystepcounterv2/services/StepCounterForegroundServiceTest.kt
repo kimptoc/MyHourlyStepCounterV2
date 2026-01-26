@@ -16,6 +16,9 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.android.controller.ServiceController
 
+import android.app.AlarmManager
+import org.robolectric.Shadows
+
 /**
  * Simplified smoke tests for StepCounterForegroundService.
  *
@@ -23,48 +26,37 @@ import org.robolectric.android.controller.ServiceController
  * Business logic (missed boundary detection, step calculations) is tested in separate logic tests.
  * Full integration testing is covered by instrumentation tests.
  */
-@RunWith(RobolectricTestRunner::class)
-@Config(sdk = [33])
+import androidx.test.rule.ServiceTestRule
+import com.example.myhourlystepcounterv2.notifications.AlarmScheduler
+import io.mockk.every
+import io.mockk.mockkStatic
+import io.mockk.verify
+import org.junit.Rule
+
+@ExperimentalCoroutinesApi
+@RunWith(AndroidJUnit4::class)
 class StepCounterForegroundServiceTest {
 
-    private lateinit var serviceController: ServiceController<StepCounterForegroundService>
-    private lateinit var service: StepCounterForegroundService
+    @get:Rule
+    val serviceRule = ServiceTestRule()
+
     private lateinit var context: Context
 
-    @OptIn(ExperimentalCoroutinesApi::class)
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
-
-        // Use Robolectric's ServiceController to properly initialize the service
-        serviceController = Robolectric.buildService(StepCounterForegroundService::class.java)
-        service = serviceController.create().get()
-
-        Dispatchers.setMain(UnconfinedTestDispatcher())
-    }
-
-    @After
-    fun tearDown() {
-        // Clean up service and give background coroutines time to finish
-        try {
-            service.onDestroy()
-        } catch (e: Exception) {
-            // Ignore cleanup errors
-        }
-        Thread.sleep(100)
     }
 
     @Test
-    fun testOnStartCommand_returnsStartSticky() {
+    fun testOnCreate_schedulesBoundaryCheckAlarm() {
         // Given
-        val intent = Intent(context, StepCounterForegroundService::class.java)
-        val flags = 0
-        val startId = 1
+        mockkStatic(AlarmScheduler::class)
+        every { AlarmScheduler.scheduleBoundaryCheckAlarm(any()) } returns Unit
 
         // When
-        val result = service.onStartCommand(intent, flags, startId)
+        serviceRule.startService(Intent(context, StepCounterForegroundService::class.java))
 
-        // Then - verify service returns START_STICKY for restart behavior
-        assert(result == android.app.Service.START_STICKY)
+        // Then
+        verify { AlarmScheduler.scheduleBoundaryCheckAlarm(any()) }
     }
 }

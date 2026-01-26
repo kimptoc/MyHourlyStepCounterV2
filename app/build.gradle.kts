@@ -99,6 +99,7 @@ dependencies {
     testImplementation(libs.androidx.test.runner) // For Robolectric
     testImplementation("org.robolectric:robolectric:4.11")
     testImplementation(libs.androidx.work.testing) // Can be here if only for local tests
+    testImplementation(libs.mockk)
 
 
     // Dependencies only for instrumentation tests

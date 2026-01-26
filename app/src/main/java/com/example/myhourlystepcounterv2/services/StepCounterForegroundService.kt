@@ -105,6 +105,10 @@ class StepCounterForegroundService : android.app.Service() {
 
         // Hour boundary detection with multi-layer error recovery
         startHourBoundaryLoopWithRecovery()
+
+        // Schedule periodic boundary check alarm (every 15 minutes backup)
+        com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleBoundaryCheckAlarm(applicationContext)
+        android.util.Log.d("StepCounterFGSvc", "Boundary check alarm scheduled on service start")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -415,6 +419,10 @@ class StepCounterForegroundService : android.app.Service() {
             // Reschedule alarm as backup (in case service stops)
             com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleHourBoundaryAlarms(applicationContext)
             android.util.Log.d("StepCounterFGSvc", "Rescheduled backup alarm for next hour")
+
+            // Also reschedule boundary check alarm
+            com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleBoundaryCheckAlarm(applicationContext)
+            android.util.Log.d("StepCounterFGSvc", "Rescheduled boundary check alarm")
         } catch (e: Exception) {
             android.util.Log.e("StepCounterFGSvc", "Error processing hour boundary", e)
         }

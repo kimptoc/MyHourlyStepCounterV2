@@ -1,5 +1,10 @@
 package com.example.myhourlystepcounterv2.ui
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -8,6 +13,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -29,6 +38,13 @@ import com.example.myhourlystepcounterv2.StepTrackerConfig
 @Composable
 fun ProfileScreen(modifier: Modifier = Modifier) {
     val scrollState = rememberScrollState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val powerManager = remember { context.getSystemService(Context.POWER_SERVICE) as PowerManager }
+
+    // Check battery optimization status
+    val isBatteryOptimizationEnabled = remember(context.packageName) {
+        !powerManager.isIgnoringBatteryOptimizations(context.packageName)
+    }
 
     Column(
         modifier = modifier
@@ -44,6 +60,84 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(bottom = 32.dp)
         )
+
+        // Battery Optimization Warning (if enabled)
+        if (isBatteryOptimizationEnabled) {
+            Card(
+                modifier = Modifier
+                    .padding(vertical = 16.dp)
+                    .fillMaxSize(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "⚠️ Battery Optimization Active",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+
+                    Text(
+                        text = "Battery optimization is restricting background step tracking. The app may not count steps accurately while minimized.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+
+                    Button(
+                        onClick = {
+                            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                data = Uri.parse("package:${context.packageName}")
+                            }
+                            context.startActivity(intent)
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError
+                        )
+                    ) {
+                        Text("Fix Battery Optimization")
+                    }
+                }
+            }
+        } else {
+            // Show success message when battery optimization is disabled
+            Card(
+                modifier = Modifier
+                    .padding(vertical = 16.dp)
+                    .fillMaxSize(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "✓ Battery Optimization Disabled",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+
+                    Text(
+                        text = "Background step tracking is unrestricted and will work properly.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        }
 
         // Build Information Section
         Column(

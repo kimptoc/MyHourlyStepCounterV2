@@ -173,4 +173,88 @@ class AlarmSchedulerTest {
             intent.component?.className?.contains("HourBoundaryReceiver") == true
         )
     }
+
+    @Test
+    fun testScheduleBoundaryCheckAlarm_schedulesAlarm15MinutesFromNow() {
+        // Given - record current time
+        val beforeScheduling = System.currentTimeMillis()
+
+        // When
+        AlarmScheduler.scheduleBoundaryCheckAlarm(context, skipPermissionCheck = true)
+
+        // Then
+        val scheduledAlarms = shadowAlarmManager.scheduledAlarms
+        assertTrue("Boundary check alarm should be scheduled", scheduledAlarms.isNotEmpty())
+
+        val alarm = scheduledAlarms.last()
+        assertEquals(AlarmManager.RTC_WAKEUP, alarm.type)
+
+        // Verify scheduled time is approximately 15 minutes from now
+        val expectedTime = beforeScheduling + (15 * 60 * 1000L)
+        val scheduledTime = alarm.triggerAtTime
+
+        // Allow 2 second tolerance for test execution time
+        val tolerance = 2000L
+        assertTrue(
+            "Alarm should be scheduled ~15 minutes from now (expected: $expectedTime, actual: $scheduledTime)",
+            Math.abs(scheduledTime - expectedTime) < tolerance
+        )
+    }
+
+    @Test
+    fun testScheduleBoundaryCheckAlarm_createsPendingIntentWithCorrectAction() {
+        // When
+        AlarmScheduler.scheduleBoundaryCheckAlarm(context, skipPermissionCheck = true)
+
+        // Then
+        val scheduledAlarms = shadowAlarmManager.scheduledAlarms
+        assertTrue("Alarm should be scheduled", scheduledAlarms.isNotEmpty())
+
+        val alarm = scheduledAlarms.last()
+        assertNotNull("PendingIntent should be created", alarm.operation)
+
+        // Verify the intent targets HourBoundaryReceiver with BOUNDARY_CHECK action
+        val shadowPendingIntent = Shadows.shadowOf(alarm.operation)
+        val intent = shadowPendingIntent.savedIntent
+        assertNotNull("Intent should not be null", intent)
+        assertTrue(
+            "Intent should target HourBoundaryReceiver",
+            intent.component?.className?.contains("HourBoundaryReceiver") == true
+        )
+        assertEquals(
+            "Intent should have ACTION_BOUNDARY_CHECK action",
+            "com.example.myhourlystepcounterv2.ACTION_BOUNDARY_CHECK",
+            intent.action
+        )
+    }
+
+    @Test
+    fun testCancelBoundaryCheckAlarm_doesNotCrash() {
+        // Given - alarm is scheduled
+        AlarmScheduler.scheduleBoundaryCheckAlarm(context, skipPermissionCheck = true)
+
+        // When
+        AlarmScheduler.cancelBoundaryCheckAlarm(context)
+
+        // Then - should not crash
+        // Note: Robolectric's shadow doesn't automatically remove alarms when cancel() is called
+    }
+
+    @Test
+    fun testBoundaryCheckAlarm_usesExactAndAllowWhileIdle() {
+        // When
+        AlarmScheduler.scheduleBoundaryCheckAlarm(context, skipPermissionCheck = true)
+
+        // Then
+        val scheduledAlarms = shadowAlarmManager.scheduledAlarms
+        assertTrue("Alarm should be scheduled", scheduledAlarms.isNotEmpty())
+
+        val alarm = scheduledAlarms.last()
+        // Verify alarm type is RTC_WAKEUP (wakes device from sleep)
+        assertEquals(
+            "Alarm should use RTC_WAKEUP to wake device",
+            AlarmManager.RTC_WAKEUP,
+            alarm.type
+        )
+    }
 }

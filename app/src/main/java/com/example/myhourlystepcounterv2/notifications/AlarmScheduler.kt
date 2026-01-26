@@ -11,6 +11,10 @@ object AlarmScheduler {
     private const val REQUEST_CODE_REMINDER = 1001
     private const val REQUEST_CODE_HOUR_BOUNDARY = 1002
     private const val REQUEST_CODE_SECOND_REMINDER = 1003
+    private const val REQUEST_CODE_BOUNDARY_CHECK = 1004
+
+    // Check every 15 minutes for missed boundaries
+    private const val BOUNDARY_CHECK_INTERVAL_MS = 15 * 60 * 1000L
 
     /**
      * Schedule exact alarm at 50 minutes past the current/next hour (XX:50)
@@ -253,6 +257,79 @@ object AlarmScheduler {
             alarmManager.cancel(it)
             it.cancel()
             android.util.Log.i("AlarmScheduler", "Hour boundary alarms cancelled")
+        }
+    }
+
+    /**
+     * Schedule periodic alarm every 15 minutes to check for missed hour boundaries
+     * This provides a backup safety net if the main hour boundary alarm fails
+     * Uses setExactAndAllowWhileIdle for precise timing even during doze mode
+     */
+    fun scheduleBoundaryCheckAlarm(context: Context, skipPermissionCheck: Boolean = false) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+
+        // Check if SCHEDULE_EXACT_ALARM permission is granted (Android 12+)
+        if (!skipPermissionCheck && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (!alarmManager.canScheduleExactAlarms()) {
+                android.util.Log.w(
+                    "AlarmScheduler",
+                    "Cannot schedule exact alarms - permission not granted"
+                )
+                return
+            }
+        }
+
+        // Create explicit intent to target the receiver directly
+        val intent = Intent(context, HourBoundaryReceiver::class.java).apply {
+            action = "com.example.myhourlystepcounterv2.ACTION_BOUNDARY_CHECK"
+        }
+
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            REQUEST_CODE_BOUNDARY_CHECK,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        // Schedule 15 minutes from now
+        val triggerTime = System.currentTimeMillis() + BOUNDARY_CHECK_INTERVAL_MS
+
+        // Use setExactAndAllowWhileIdle for precise timing even during doze mode
+        // Receiver will reschedule the next check after execution
+        alarmManager.setExactAndAllowWhileIdle(
+            AlarmManager.RTC_WAKEUP,
+            triggerTime,
+            pendingIntent
+        )
+
+        android.util.Log.i(
+            "AlarmScheduler",
+            "Boundary check alarm scheduled (exact) at ${java.util.Date(triggerTime)} (+15 min)"
+        )
+    }
+
+    /**
+     * Cancel scheduled boundary check alarms
+     */
+    fun cancelBoundaryCheckAlarm(context: Context) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+
+        // Create intent matching the one used for scheduling
+        val intent = Intent(context, HourBoundaryReceiver::class.java).apply {
+            action = "com.example.myhourlystepcounterv2.ACTION_BOUNDARY_CHECK"
+        }
+
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            REQUEST_CODE_BOUNDARY_CHECK,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_NO_CREATE
+        )
+
+        pendingIntent?.let {
+            alarmManager.cancel(it)
+            it.cancel()
+            android.util.Log.i("AlarmScheduler", "Boundary check alarm cancelled")
         }
     }
 }

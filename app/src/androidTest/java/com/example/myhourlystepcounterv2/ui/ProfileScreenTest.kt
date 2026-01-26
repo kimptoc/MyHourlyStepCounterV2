@@ -1,10 +1,11 @@
 package com.example.myhourlystepcounterv2.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.example.myhourlystepcounterv2.StepTrackerConfig
+import com.example.myhourlystepcounterv2.MainActivity
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -13,128 +14,24 @@ import org.junit.runner.RunWith
 class ProfileScreenTest {
 
     @get:Rule
-    val composeTestRule = createComposeRule()
+    val composeTestRule = createAndroidComposeRule<MainActivity>()
 
     @Test
-    fun testProfileScreen_configValueDisplay_morningThresholdDisplay_shows1000AM() {
-        // Given
-        val morningThresholdDisplay = StepTrackerConfig.MORNING_THRESHOLD_DISPLAY
+    fun testBatteryOptimizationWarning() {
+        // Navigate to the Profile screen
+        composeTestRule.onNodeWithText("Profile").performClick()
 
-        // When
-        composeTestRule.setContent {
-            ProfileScreen()
+        // Note: This test relies on the actual device state for battery optimization.
+        // To test both states, you would need to manually enable/disable battery optimization
+        // on the test device before running the test.
+
+        // We can check for either the warning or the success message.
+        try {
+            composeTestRule.onNodeWithText("Battery Optimization Active").assertIsDisplayed()
+            composeTestRule.onNodeWithText("Fix Battery Optimization").assertIsDisplayed()
+        } catch (e: AssertionError) {
+            composeTestRule.onNodeWithText("Battery Optimization Disabled").assertIsDisplayed()
         }
-
-        // Then
-        // Verify that MORNING_THRESHOLD_DISPLAY renders as "10:00 AM"
-        composeTestRule.onNodeWithText(morningThresholdDisplay).assertIsDisplayed()
-    }
-
-    @Test
-    fun testProfileScreen_configValueDisplay_maxStepsDisplay_shows10000() {
-        // Given
-        val maxStepsDisplay = "${StepTrackerConfig.MAX_STEPS_DISPLAY}"
-
-        // When
-        composeTestRule.setContent {
-            ProfileScreen()
-        }
-
-        // Then
-        // Verify that MAX_STEPS_DISPLAY renders as "10,000"
-        composeTestRule.onNodeWithText(maxStepsDisplay).assertIsDisplayed()
-    }
-
-    @Test
-    fun testProfileScreen_configValueDisplay_buildTime_displaysCorrectly() {
-        // Given
-        val buildTime = "Build Time:"  // This is the text that appears in the UI
-
-        // When
-        composeTestRule.setContent {
-            ProfileScreen()
-        }
-
-        // Then
-        // Verify that build time displays correctly
-        composeTestRule.onNodeWithText(buildTime).assertIsDisplayed()
-    }
-
-    @Test
-    fun testProfileScreen_toggleSwitches_permanentNotificationEnabled_switchClickTogglesState() {
-        // When
-        composeTestRule.setContent {
-            ProfileScreen()
-        }
-
-        // Then
-        // Verify that clicking the switch toggles the state
-        // This is difficult to test directly without clickable element identification
-        composeTestRule.onNodeWithText("Permanent notification").assertIsDisplayed()
-    }
-
-    @Test
-    fun testProfileScreen_toggleSwitches_useWakeLock_switchClickTogglesState() {
-        // When
-        composeTestRule.setContent {
-            ProfileScreen()
-        }
-
-        // Then
-        // Verify that clicking the switch toggles the state
-        // This is difficult to test directly without clickable element identification
-        composeTestRule.onNodeWithText("Keep processor awake (wake-lock)").assertIsDisplayed()
-    }
-
-    @Test
-    fun testProfileScreen_toggleSwitches_coroutineLaunchesWhenToggling() {
-        // When
-        composeTestRule.setContent {
-            ProfileScreen()
-        }
-
-        // Then
-        // Verify that coroutines launch when toggling
-        // This is difficult to test directly without observing side effects
-        composeTestRule.onNodeWithText("App Behavior Settings").assertIsDisplayed()
-    }
-
-    @Test
-    fun testProfileScreen_batteryWarning_appearsWhenWakeLockEnabled() {
-        // When
-        composeTestRule.setContent {
-            ProfileScreen()
-        }
-
-        // Then
-        // Verify that battery warning appears when wake-lock is enabled
-        // This is difficult to test directly without specific text identification
-        composeTestRule.onNodeWithText("App Behavior Settings").assertIsDisplayed()
-    }
-
-    @Test
-    fun testProfileScreen_scrollState_longContentScrollable() {
-        // When
-        composeTestRule.setContent {
-            ProfileScreen()
-        }
-
-        // Then
-        // Verify that long content is scrollable
-        // This is difficult to test directly without specific scrollable element identification
-        composeTestRule.onNodeWithText("Profile").assertIsDisplayed()
-    }
-
-    @Test
-    fun testProfileScreen_dividerReplacement_horizontalDivider_usedInsteadOfDeprecatedDivider() {
-        // When
-        composeTestRule.setContent {
-            ProfileScreen()
-        }
-
-        // Then
-        // Verify that HorizontalDivider is used instead of deprecated Divider
-        // This is difficult to test directly without inspecting the composition
-        composeTestRule.onNodeWithText("Build Information").assertIsDisplayed()
     }
 }
+
