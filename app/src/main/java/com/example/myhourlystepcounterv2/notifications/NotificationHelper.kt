@@ -44,10 +44,47 @@ object NotificationHelper {
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
-            .setVibrate(longArrayOf(0, 300, 200, 300))
+            .setVibrate(StepTrackerConfig.FIRST_REMINDER_VIBRATION_PATTERN)
             .build()
 
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(NOTIFICATION_ID, notification)
+    }
+
+    fun sendSecondStepReminderNotification(context: Context, currentSteps: Int) {
+        createReminderNotificationChannel(context)
+
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            2, // Different request code
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(context.getString(R.string.second_reminder_notification_title))
+            .setContentText(
+                context.getString(
+                    R.string.second_reminder_notification_text,
+                    currentSteps,
+                    StepTrackerConfig.STEP_REMINDER_THRESHOLD
+                )
+            )
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setVibrate(StepTrackerConfig.SECOND_REMINDER_VIBRATION_PATTERN)
+            .setSound(null) // No sound, vibration only
+            .build()
+
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        // Use same notification ID to replace the first reminder
         notificationManager.notify(NOTIFICATION_ID, notification)
     }
 
@@ -94,7 +131,7 @@ object NotificationHelper {
             val channel = NotificationChannel(CHANNEL_ID, name, importance).apply {
                 description = descriptionText
                 enableVibration(true)
-                vibrationPattern = longArrayOf(0, 300, 200, 300)
+                vibrationPattern = StepTrackerConfig.FIRST_REMINDER_VIBRATION_PATTERN
             }
 
             val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

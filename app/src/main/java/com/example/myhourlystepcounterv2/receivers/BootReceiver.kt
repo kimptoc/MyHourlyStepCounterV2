@@ -26,13 +26,16 @@ class BootReceiver : BroadcastReceiver() {
                         android.util.Log.w("BootReceiver", "Failed to start foreground service on boot: ${e.message}")
                     }
 
-                    // Also schedule step reminders if enabled
+                    // Also schedule step reminders if enabled (both first and second)
                     val reminderEnabled = prefs.reminderNotificationEnabled.first()
                     if (reminderEnabled) {
                         com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleStepReminders(
                             context.applicationContext
                         )
-                        android.util.Log.d("BootReceiver", "Step reminders scheduled on boot")
+                        com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleSecondStepReminder(
+                            context.applicationContext
+                        )
+                        android.util.Log.d("BootReceiver", "Step reminders scheduled on boot (XX:50 and XX:55)")
                     }
 
                     // Always schedule hour boundary alarms for notification resets

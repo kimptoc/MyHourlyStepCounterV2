@@ -33,6 +33,28 @@ object StepTrackerConfig {
     const val STEP_REMINDER_THRESHOLD = 250
 
     /**
+     * Two-stage reminder system:
+     * - First reminder at XX:50 (10 minutes before hour) with standard vibration
+     * - Second reminder at XX:55 (5 minutes before hour) with enhanced vibration
+     *   (only sent if steps still below threshold)
+     */
+
+    /**
+     * Vibration pattern for first reminder (XX:50).
+     * Pattern: [delay, vibrate, pause, vibrate]
+     * Total duration: ~800ms with 2 vibrations
+     */
+    val FIRST_REMINDER_VIBRATION_PATTERN = longArrayOf(0, 300, 200, 300)
+
+    /**
+     * Vibration pattern for second reminder (XX:55).
+     * More intense/urgent pattern with 4 vibrations instead of 2.
+     * Pattern: [delay, vibrate, pause, vibrate, pause, vibrate, pause, vibrate]
+     * Total duration: ~1600ms with 4 vibrations
+     */
+    val SECOND_REMINDER_VIBRATION_PATTERN = longArrayOf(0, 400, 200, 400, 200, 400, 200, 400)
+
+    /**
      * String representations for display
      */
     const val MORNING_THRESHOLD_DISPLAY = "10:00 AM"

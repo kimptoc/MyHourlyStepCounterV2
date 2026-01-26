@@ -29,6 +29,10 @@ class StepPreferences(private val context: Context) {
         val REMINDER_SENT_THIS_HOUR = booleanPreferencesKey("reminder_sent_this_hour")
         val ACHIEVEMENT_SENT_THIS_HOUR = booleanPreferencesKey("achievement_sent_this_hour")
 
+        // Second reminder (XX:55) preferences
+        val LAST_SECOND_REMINDER_TIME = longPreferencesKey("last_second_reminder_time")
+        val SECOND_REMINDER_SENT_THIS_HOUR = booleanPreferencesKey("second_reminder_sent_this_hour")
+
         // Defaults (user requested defaults ON)
         const val PERMANENT_NOTIFICATION_DEFAULT = true
         const val USE_WAKE_LOCK_DEFAULT = true
@@ -71,6 +75,12 @@ class StepPreferences(private val context: Context) {
 
     val achievementSentThisHour: Flow<Boolean> = context.dataStore.data
         .map { preferences -> preferences[ACHIEVEMENT_SENT_THIS_HOUR] ?: false }
+
+    val lastSecondReminderTime: Flow<Long> = context.dataStore.data
+        .map { preferences -> preferences[LAST_SECOND_REMINDER_TIME] ?: 0L }
+
+    val secondReminderSentThisHour: Flow<Boolean> = context.dataStore.data
+        .map { preferences -> preferences[SECOND_REMINDER_SENT_THIS_HOUR] ?: false }
 
     suspend fun savePermanentNotificationEnabled(enabled: Boolean) {
         context.dataStore.updateData { preferences ->
@@ -174,6 +184,22 @@ class StepPreferences(private val context: Context) {
         context.dataStore.updateData { preferences ->
             preferences.toMutablePreferences().apply {
                 this[ACHIEVEMENT_SENT_THIS_HOUR] = sent
+            }
+        }
+    }
+
+    suspend fun saveLastSecondReminderTime(timestamp: Long) {
+        context.dataStore.updateData { preferences ->
+            preferences.toMutablePreferences().apply {
+                this[LAST_SECOND_REMINDER_TIME] = timestamp
+            }
+        }
+    }
+
+    suspend fun saveSecondReminderSentThisHour(sent: Boolean) {
+        context.dataStore.updateData { preferences ->
+            preferences.toMutablePreferences().apply {
+                this[SECOND_REMINDER_SENT_THIS_HOUR] = sent
             }
         }
     }

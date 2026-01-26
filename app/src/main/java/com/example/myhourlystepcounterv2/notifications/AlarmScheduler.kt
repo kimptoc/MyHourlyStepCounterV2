@@ -10,6 +10,7 @@ import java.util.Calendar
 object AlarmScheduler {
     private const val REQUEST_CODE_REMINDER = 1001
     private const val REQUEST_CODE_HOUR_BOUNDARY = 1002
+    private const val REQUEST_CODE_SECOND_REMINDER = 1003
 
     /**
      * Schedule exact alarm at 50 minutes past the current/next hour (XX:50)
@@ -89,6 +90,88 @@ object AlarmScheduler {
             alarmManager.cancel(it)
             it.cancel()
             android.util.Log.i("AlarmScheduler", "Step reminders cancelled")
+        }
+    }
+
+    /**
+     * Schedule exact alarm at 55 minutes past the current/next hour (XX:55)
+     * This is the second, more urgent reminder if steps are still below threshold
+     * Uses setExactAndAllowWhileIdle for precise timing even during doze mode
+     */
+    fun scheduleSecondStepReminder(context: Context, skipPermissionCheck: Boolean = false) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+
+        // Check if SCHEDULE_EXACT_ALARM permission is granted (Android 12+)
+        if (!skipPermissionCheck && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (!alarmManager.canScheduleExactAlarms()) {
+                android.util.Log.w(
+                    "AlarmScheduler",
+                    "Cannot schedule exact alarms - permission not granted"
+                )
+                return
+            }
+        }
+
+        // Create explicit intent to target the receiver directly
+        // Use same receiver but different request code
+        val intent = Intent(context, StepReminderReceiver::class.java).apply {
+            action = StepReminderReceiver.ACTION_SECOND_STEP_REMINDER
+        }
+
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            REQUEST_CODE_SECOND_REMINDER,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        // Calculate next XX:55 time
+        val calendar = Calendar.getInstance().apply {
+            if (get(Calendar.MINUTE) >= 55) {
+                // If past :55, schedule for next hour
+                add(Calendar.HOUR_OF_DAY, 1)
+            }
+            set(Calendar.MINUTE, 55)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+
+        // Use setExactAndAllowWhileIdle for precise timing even during doze mode
+        // Receiver will reschedule the next alarm after execution
+        alarmManager.setExactAndAllowWhileIdle(
+            AlarmManager.RTC_WAKEUP,
+            calendar.timeInMillis,
+            pendingIntent
+        )
+
+        android.util.Log.i(
+            "AlarmScheduler",
+            "Second step reminder scheduled (exact) at ${calendar.time} (:55)"
+        )
+    }
+
+    /**
+     * Cancel scheduled second step reminder
+     */
+    fun cancelSecondStepReminder(context: Context) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+
+        // Create intent matching the one used for scheduling
+        val intent = Intent(context, StepReminderReceiver::class.java).apply {
+            action = StepReminderReceiver.ACTION_SECOND_STEP_REMINDER
+        }
+
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            REQUEST_CODE_SECOND_REMINDER,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_NO_CREATE
+        )
+
+        pendingIntent?.let {
+            alarmManager.cancel(it)
+            it.cancel()
+            android.util.Log.i("AlarmScheduler", "Second step reminder cancelled")
         }
     }
 

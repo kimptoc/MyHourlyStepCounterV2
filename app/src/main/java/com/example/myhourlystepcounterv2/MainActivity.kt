@@ -66,16 +66,22 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Schedule step reminder alarms
+        // Schedule step reminder alarms (both first and second reminders)
         lifecycleScope.launch {
             preferences.reminderNotificationEnabled.collect { enabled ->
                 if (enabled) {
                     com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleStepReminders(
                         applicationContext
                     )
-                    android.util.Log.d("MainActivity", "Step reminders scheduled")
+                    com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleSecondStepReminder(
+                        applicationContext
+                    )
+                    android.util.Log.d("MainActivity", "Step reminders scheduled (XX:50 and XX:55)")
                 } else {
                     com.example.myhourlystepcounterv2.notifications.AlarmScheduler.cancelStepReminders(
+                        applicationContext
+                    )
+                    com.example.myhourlystepcounterv2.notifications.AlarmScheduler.cancelSecondStepReminder(
                         applicationContext
                     )
                     android.util.Log.d("MainActivity", "Step reminders cancelled")
