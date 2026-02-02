@@ -1,3 +1,4 @@
+@file:OptIn(ExperimentalCoroutinesApi::class)
 package com.example.myhourlystepcounterv2.ui
 
 import android.content.Context
@@ -11,6 +12,7 @@ import com.example.myhourlystepcounterv2.data.StepPreferences
 import com.example.myhourlystepcounterv2.data.StepRepository
 import com.example.myhourlystepcounterv2.sensor.StepSensorManager
 import com.example.myhourlystepcounterv2.worker.WorkManagerScheduler
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow

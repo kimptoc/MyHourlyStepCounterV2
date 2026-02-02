@@ -46,10 +46,10 @@ class AlarmSchedulerTest {
 
         // Verify the scheduled time is at :50 minutes
         val alarm = scheduledAlarms.first()
-        assertEquals(AlarmManager.RTC_WAKEUP, alarm.type)
+        assertEquals(AlarmManager.RTC_WAKEUP, alarm.getType())
 
         val calendar = Calendar.getInstance().apply {
-            timeInMillis = alarm.triggerAtTime
+            timeInMillis = alarm.triggerAtMs
         }
         assertEquals(50, calendar.get(Calendar.MINUTE))
         assertEquals(0, calendar.get(Calendar.SECOND))
@@ -69,7 +69,7 @@ class AlarmSchedulerTest {
 
         val alarm = scheduledAlarms.first()
         val scheduledTime = Calendar.getInstance().apply {
-            timeInMillis = alarm.triggerAtTime
+            timeInMillis = alarm.triggerAtMs
         }
 
         // If current time is >= :50, should schedule for next hour
@@ -104,10 +104,10 @@ class AlarmSchedulerTest {
         assertTrue("Hour boundary alarm should be scheduled", scheduledAlarms.isNotEmpty())
 
         val alarm = scheduledAlarms.last() // Get the most recent alarm
-        assertEquals(AlarmManager.RTC_WAKEUP, alarm.type)
+        assertEquals(AlarmManager.RTC_WAKEUP, alarm.getType())
 
         val calendar = Calendar.getInstance().apply {
-            timeInMillis = alarm.triggerAtTime
+            timeInMillis = alarm.triggerAtMs
         }
         assertEquals(0, calendar.get(Calendar.MINUTE))
         assertEquals(0, calendar.get(Calendar.SECOND))
@@ -131,6 +131,7 @@ class AlarmSchedulerTest {
     }
 
     @Test
+    @Suppress("DEPRECATION")
     fun testScheduleStepReminders_createsPendingIntentWithCorrectFlags() {
         // When
         AlarmScheduler.scheduleStepReminders(context, skipPermissionCheck = true)
@@ -153,6 +154,7 @@ class AlarmSchedulerTest {
     }
 
     @Test
+    @Suppress("DEPRECATION")
     fun testScheduleHourBoundaryAlarms_createsPendingIntentWithCorrectFlags() {
         // When
         AlarmScheduler.scheduleHourBoundaryAlarms(context, skipPermissionCheck = true)
@@ -187,11 +189,11 @@ class AlarmSchedulerTest {
         assertTrue("Boundary check alarm should be scheduled", scheduledAlarms.isNotEmpty())
 
         val alarm = scheduledAlarms.last()
-        assertEquals(AlarmManager.RTC_WAKEUP, alarm.type)
+        assertEquals(AlarmManager.RTC_WAKEUP, alarm.getType())
 
         // Verify scheduled time is approximately 15 minutes from now
         val expectedTime = beforeScheduling + (15 * 60 * 1000L)
-        val scheduledTime = alarm.triggerAtTime
+        val scheduledTime = alarm.triggerAtMs
 
         // Allow 2 second tolerance for test execution time
         val tolerance = 2000L
@@ -202,6 +204,7 @@ class AlarmSchedulerTest {
     }
 
     @Test
+    @Suppress("DEPRECATION")
     fun testScheduleBoundaryCheckAlarm_createsPendingIntentWithCorrectAction() {
         // When
         AlarmScheduler.scheduleBoundaryCheckAlarm(context, skipPermissionCheck = true)
@@ -254,7 +257,7 @@ class AlarmSchedulerTest {
         assertEquals(
             "Alarm should use RTC_WAKEUP to wake device",
             AlarmManager.RTC_WAKEUP,
-            alarm.type
+            alarm.getType()
         )
     }
 }
