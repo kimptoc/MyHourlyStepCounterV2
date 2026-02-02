@@ -29,6 +29,9 @@ class StepPreferences(private val context: Context) {
         val REMINDER_SENT_THIS_HOUR = booleanPreferencesKey("reminder_sent_this_hour")
         val ACHIEVEMENT_SENT_THIS_HOUR = booleanPreferencesKey("achievement_sent_this_hour")
 
+        // Deduplication preference
+        val LAST_PROCESSED_BOUNDARY_TIMESTAMP = longPreferencesKey("last_processed_boundary_timestamp")
+
         // Second reminder (XX:55) preferences
         val LAST_SECOND_REMINDER_TIME = longPreferencesKey("last_second_reminder_time")
         val SECOND_REMINDER_SENT_THIS_HOUR = booleanPreferencesKey("second_reminder_sent_this_hour")
@@ -81,6 +84,9 @@ class StepPreferences(private val context: Context) {
 
     val secondReminderSentThisHour: Flow<Boolean> = context.dataStore.data
         .map { preferences -> preferences[SECOND_REMINDER_SENT_THIS_HOUR] ?: false }
+
+    val lastProcessedBoundaryTimestamp: Flow<Long> = context.dataStore.data
+        .map { preferences -> preferences[LAST_PROCESSED_BOUNDARY_TIMESTAMP] ?: 0L }
 
     suspend fun savePermanentNotificationEnabled(enabled: Boolean) {
         context.dataStore.updateData { preferences ->
@@ -200,6 +206,14 @@ class StepPreferences(private val context: Context) {
         context.dataStore.updateData { preferences ->
             preferences.toMutablePreferences().apply {
                 this[SECOND_REMINDER_SENT_THIS_HOUR] = sent
+            }
+        }
+    }
+
+    suspend fun saveLastProcessedBoundaryTimestamp(timestamp: Long) {
+        context.dataStore.updateData { preferences ->
+            preferences.toMutablePreferences().apply {
+                this[LAST_PROCESSED_BOUNDARY_TIMESTAMP] = timestamp
             }
         }
     }

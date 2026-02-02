@@ -36,6 +36,17 @@ class HourBoundaryCheckWorker(
 
             // Get the last processed hour timestamp from preferences
             val lastProcessedHour = preferences.currentHourTimestamp.first()
+            val lastProcessed = preferences.lastProcessedBoundaryTimestamp.first()
+
+            // Deduplication: Skip if this hour was already processed
+            if (lastProcessedHour > 0 && lastProcessedHour <= lastProcessed) {
+                android.util.Log.d(
+                    "HourBoundaryCheckWorker",
+                    "No missed hour boundaries detected (persistent check). Last saved: ${java.util.Date(lastProcessedHour)}, " +
+                            "Processed up to: ${java.util.Date(lastProcessed)}"
+                )
+                return Result.success()
+            }
 
             // Check if any hour boundaries were missed
             if (lastProcessedHour > 0 && lastProcessedHour < currentHourTimestamp) {
@@ -82,6 +93,10 @@ class HourBoundaryCheckWorker(
                             }
                         }
                     }
+
+                    // Mark as processed
+                    val lastHourToMark = currentHourTimestamp - (60 * 60 * 1000).toLong()
+                    preferences.saveLastProcessedBoundaryTimestamp(lastHourToMark)
 
                     // Update preferences with the current hour and step count
                     preferences.saveHourData(

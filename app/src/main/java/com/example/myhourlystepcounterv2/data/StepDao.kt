@@ -38,9 +38,17 @@ interface StepDao {
         if (existing == null) {
             // No record yet - insert
             insertStep(StepEntity(timestamp = timestamp, stepCount = stepCount))
+            android.util.Log.i(
+                "StepDao",
+                "Inserted hour ${java.util.Date(timestamp)}: steps=$stepCount"
+            )
         } else if (stepCount > existing.stepCount) {
             // Existing record but new value is higher - update
             insertStep(StepEntity(timestamp = timestamp, stepCount = stepCount))
+            android.util.Log.i(
+                "StepDao",
+                "Updated hour ${java.util.Date(timestamp)}: existing=${existing.stepCount}, new=$stepCount"
+            )
         } else {
             // Existing record is higher or equal - keep it
             android.util.Log.w(

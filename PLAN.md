@@ -1,4 +1,220 @@
-# CURRENT STATUS & NEXT STEPS (as of 2026-01-23)
+# CURRENT STATUS & NEXT STEPS (as of 2026-02-02)
+
+## 🔴 CRITICAL BUG: HourBoundaryReceiver Crashing Every Hour (Feb 2, 2026)
+
+### Symptoms Reported
+- App stopped tracking steps overnight
+- Opened app in morning: showed 0 for both hourly and daily totals
+- Samsung Health showed 36 steps for the same period
+- Steps are permanently lost
+
+### Root Cause Analysis
+
+**Error from device logs (repeated at every hour):**
+```
+java.lang.NullPointerException: Attempt to invoke virtual method
+'void android.content.BroadcastReceiver$PendingResult.finish()' on a null object reference
+at HourBoundaryReceiver$processHourBoundary$1.invokeSuspend(HourBoundaryReceiver.kt:218)
+```
+
+**The Bug:** `goAsync()` is called **twice** in one BroadcastReceiver lifecycle.
+
+**Call Path:**
+1. `ACTION_BOUNDARY_CHECK` received → `onReceive()` calls `checkForMissedBoundaries()`
+2. `checkForMissedBoundaries()` calls `goAsync()` at line 53
+3. If missed boundary detected, calls `processHourBoundary(context, isBackupCheck = true)` at line 84
+4. `processHourBoundary()` **also** calls `goAsync()` at line 109
+
+**Why It Crashes:**
+- `goAsync()` can only be called **once** per `onReceive()` invocation
+- The second call returns `null`
+- The finally block at line 236 calls `pendingResult.finish()` on null → NullPointerException
+
+**Evidence from logs showing crashes at every hour boundary (Jan 31 - Feb 2):**
+```
+01-31 02:00:00 E AndroidRuntime: NullPointerException at HourBoundaryReceiver.kt:218
+01-31 03:00:02 E AndroidRuntime: NullPointerException at HourBoundaryReceiver.kt:218
+01-31 04:00:10 E AndroidRuntime: NullPointerException at HourBoundaryReceiver.kt:218
+... (crashes at every subsequent hour)
+02-01 08:00:06 E AndroidRuntime: NullPointerException at HourBoundaryReceiver.kt:218
+(no Feb 2 crashes yet because app was manually opened)
+```
+
+### Impact
+- **No hour boundaries processed** when app is in background
+- **No steps saved to database** - all steps lost
+- **Daily total shows 0** on app open (fresh baseline set)
+- Database history shows only 1 entry at midnight with 0 steps
+
+### Proposed Fix
+
+**File:** `app/src/main/java/com/example/myhourlystepcounterv2/notifications/HourBoundaryReceiver.kt`
+
+**Option 1: Pass PendingResult as Parameter**
+Modify `processHourBoundary()` to accept an optional `PendingResult` parameter. When called from `checkForMissedBoundaries()`, pass the existing result instead of calling `goAsync()` again.
+
+```kotlin
+private fun processHourBoundary(
+    context: Context,
+    isBackupCheck: Boolean = false,
+    existingPendingResult: BroadcastReceiver.PendingResult? = null
+) {
+    // Only call goAsync() if we don't already have a result
+    val pendingResult = existingPendingResult ?: goAsync()
+
+    CoroutineScope(Dispatchers.Default + SupervisorJob()).launch {
+        try {
+            // ... existing processing logic ...
+        } finally {
+            pendingResult?.finish()  // Null-safe finish
+        }
+    }
+}
+```
+
+**Changes Required:**
+1. Add `existingPendingResult` parameter to `processHourBoundary()` (line 105)
+2. Only call `goAsync()` when `existingPendingResult` is null (line 109)
+3. Pass `pendingResult` from `checkForMissedBoundaries()` to `processHourBoundary()` (line 84)
+4. Use null-safe call `pendingResult?.finish()` in finally block (line 236)
+
+### Verification Plan
+1. Build and install: `./gradlew installDebug`
+2. Monitor logcat for crashes at next hour boundary: `adb logcat | grep -E "HourBoundary|AndroidRuntime"`
+3. Verify no NullPointerException at XX:00
+4. Let run overnight and confirm steps tracked in morning
+5. Run unit tests: `./gradlew test`
+
+---
+
+## 🟡 PREVIOUS BUG: Double Counting & Zero Notifications (Feb 1, 2026)
+
+### Symptoms Reported
+1. **Notifications show 0 steps** even though steps have been taken
+2. **Opening app fixes the 0 steps issue**
+3. **Today's daily total was DOUBLE Samsung Health's count**
+
+### Root Cause Analysis (from device logs)
+
+#### Issue 1: Double Counting - Race Condition at Hour Boundary
+
+**Evidence from logs at 09:00:00:**
+```
+09:00:00.008 Saving completed hour: timestamp=1769932800000 (08:00), steps=963
+09:00:00.018 Service restart detected: missed 1 hour boundaries
+09:00:00.020 Saving missed hour: timestamp=1769932800000, steps=963
+```
+
+Same 8am timestamp saved TWICE with same 963 steps = daily total doubled.
+
+**Why it happens:** Too many overlapping mechanisms trigger at hour boundary:
+
+| Location | What | When |
+|----------|------|------|
+| `StepCounterForegroundService.kt:522` | `handleHourBoundary()` | Loop reaches XX:00 |
+| `StepCounterForegroundService.kt:486` | `checkMissedHourBoundaries()` | Loop start |
+| `StepCounterForegroundService.kt:496` | `checkMissedHourBoundaries()` | Every loop iteration |
+| `StepCounterForegroundService.kt:125` | `checkMissedHourBoundaries()` | Every `onStartCommand()` |
+| `HourBoundaryReceiver.kt:35` | `processHourBoundary()` | AlarmManager XX:00 |
+| `HourBoundaryReceiver.kt:39` | `checkForMissedBoundaries()` | Every 15 min |
+
+All of these can fire within milliseconds of each other at hour boundaries, causing duplicate saves.
+
+**Database protection insufficient:** `saveHourlyStepsAtomic()` only keeps HIGHER value. When both saves have SAME value (963), both succeed.
+
+#### Issue 2: Notifications Showing 0 Steps
+
+**Cause:** Timing issue with 3-second throttle + sensor reset
+
+**Flow at hour boundary:**
+```
+09:00:00.000 - handleHourBoundary() → resetForNewHour() → currentStepCount = 0
+09:00:00.016 - Flow emits with currentStepCount = 0 (sensor hasn't fired yet)
+09:00:00.219 - Notification shows "0 steps" (throttled update)
+09:00:XX.XXX - Sensor finally fires with new reading
+09:00:03.XXX - Next throttled update might show correct value
+```
+
+The 3-second throttle (`sample(3.seconds)` at line 92) combined with sensor reset delay means notifications can show 0 for up to several seconds after hour boundary.
+
+### Proposed Fixes
+
+#### Fix 1: Prevent Duplicate Hour Boundary Processing
+
+**Changes to `StepCounterForegroundService.kt`:**
+
+1. **Remove redundant check from loop iteration** (line 496)
+   - DELETE `checkMissedHourBoundaries()` call in the loop body
+   - Keep only the initial check at loop start (line 486)
+
+2. **Add timestamp-based deduplication:**
+   ```kotlin
+   // Add field at class level
+   @Volatile private var lastProcessedBoundaryTimestamp: Long = 0
+
+   // In handleHourBoundary(), after saving:
+   lastProcessedBoundaryTimestamp = previousHourTimestamp
+
+   // In checkMissedHourBoundaries(), add guard:
+   if (savedHourTimestamp <= lastProcessedBoundaryTimestamp) {
+       Log.d("...", "Hour $savedHourTimestamp already processed, skipping")
+       return
+   }
+   ```
+
+3. **Improve database protection:**
+   - Change `saveHourlyStepsAtomic()` to track if it actually inserted vs skipped
+   - Log when duplicate save is detected
+
+#### Fix 2: Prevent Zero Notification After Hour Boundary
+
+**Options:**
+1. **Force immediate update after reset:** After hour boundary processing, manually update notification with known values (0 for hour, calculated daily from DB)
+2. **Reduce initial throttle:** Use 1-second sample for first 5 seconds after hour boundary
+3. **Simpler:** Accept brief 0 display as expected behavior (UI will correct within 3 seconds)
+
+Recommendation: Option 1 - force immediate update is cleanest.
+
+#### Fix 3: Simplify Defense-in-Depth Architecture
+
+Current system has TOO MANY overlapping mechanisms causing race conditions. Simplify to:
+
+| Mechanism | Role | When |
+|-----------|------|------|
+| FG Service Loop | **Primary** | Always running |
+| AlarmManager XX:00 | **Backup** | Only if FG service not running |
+| WorkManager 15 min | **Safety net** | Check only, don't process if recent |
+
+Remove redundant checks from:
+- Every loop iteration (line 496) - DELETE
+- `onStartCommand()` (line 125) - KEEP but add cooldown
+
+### Files to Modify
+
+1. **`StepCounterForegroundService.kt`**
+   - Line 496: Remove `checkMissedHourBoundaries()` call
+   - Add `lastProcessedBoundaryTimestamp` field
+   - Add timestamp guard in both boundary methods
+   - Force notification update after hour boundary
+
+2. **`HourBoundaryReceiver.kt`** (optional)
+   - Add check: skip processing if foreground service handled it recently
+
+### Verification Steps
+
+1. **Test double counting:**
+   ```bash
+   adb logcat | grep -E "Saving completed|Saving missed"
+   ```
+   Should only see ONE save per hour, not two.
+
+2. **Compare with Samsung Health:** Run overnight, compare daily totals
+
+3. **Test zero notifications:** Watch notification at XX:00, should update within 3 seconds
+
+---
+
+## Previous Status (as of 2026-01-23)
 
 ## What's Implemented (Code Complete)
 

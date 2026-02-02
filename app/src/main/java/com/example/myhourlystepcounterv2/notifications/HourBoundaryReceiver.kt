@@ -56,6 +56,13 @@ class HourBoundaryReceiver(
             try {
                 val preferences = stepPreferences ?: StepPreferences(context.applicationContext)
                 val previousHourTimestamp = preferences.currentHourTimestamp.first()
+                val lastProcessed = preferences.lastProcessedBoundaryTimestamp.first()
+
+                // Deduplication: Skip if this hour was already processed
+                if (previousHourTimestamp > 0 && previousHourTimestamp <= lastProcessed) {
+                    android.util.Log.d("HourBoundary", "✓ CHECK: Hour $previousHourTimestamp already processed, skipping missed check")
+                    return@launch
+                }
 
                 // Calculate current hour timestamp
                 val currentHourTimestamp = Calendar.getInstance().apply {
@@ -74,7 +81,11 @@ class HourBoundaryReceiver(
                     )
 
                     // Trigger hour boundary processing
-                    processHourBoundary(context, isBackupCheck = true)
+                    processHourBoundary(
+                        context,
+                        isBackupCheck = true,
+                        existingPendingResult = pendingResult
+                    )
                 } else {
                     android.util.Log.d(
                         "HourBoundary",
@@ -95,11 +106,15 @@ class HourBoundaryReceiver(
     /**
      * Process the hour boundary transition
      */
-    private fun processHourBoundary(context: Context, isBackupCheck: Boolean = false) {
+    private fun processHourBoundary(
+        context: Context,
+        isBackupCheck: Boolean = false,
+        existingPendingResult: BroadcastReceiver.PendingResult? = null
+    ) {
         android.util.Log.i("HourBoundary", if (isBackupCheck) "Processing missed boundary (backup check)" else "Processing hour boundary (scheduled)")
 
         // Use goAsync() to extend BroadcastReceiver lifecycle for coroutine work
-        val pendingResult = goAsync()
+        val pendingResult = existingPendingResult ?: goAsync()
 
         CoroutineScope(Dispatchers.Default + SupervisorJob()).launch {
             try {
@@ -117,6 +132,14 @@ class HourBoundaryReceiver(
 
                 // Get the PREVIOUS hour's data that needs to be saved
                 val previousHourTimestamp = preferences.currentHourTimestamp.first()
+                val lastProcessed = preferences.lastProcessedBoundaryTimestamp.first()
+
+                // Deduplication: Skip if this hour was already processed
+                if (previousHourTimestamp > 0 && previousHourTimestamp <= lastProcessed) {
+                    android.util.Log.d("HourBoundary", "processHourBoundary: Hour $previousHourTimestamp already processed, skipping")
+                    return@launch
+                }
+
                 val previousHourStartStepCount = preferences.hourStartStepCount.first()
 
                 // Defense in depth: Check if we missed multiple hour boundaries
@@ -164,6 +187,9 @@ class HourBoundaryReceiver(
                     android.util.Log.w("HourBoundary", "Unreasonable step delta ($stepsInPreviousHour). Clamping to $MAX_STEPS_PER_HOUR.")
                     stepsInPreviousHour = MAX_STEPS_PER_HOUR
                 }
+
+                // Mark as processed BEFORE async operations to prevent races
+                preferences.saveLastProcessedBoundaryTimestamp(previousHourTimestamp)
 
                 // Save the completed previous hour to database
                 android.util.Log.i(
@@ -215,7 +241,7 @@ class HourBoundaryReceiver(
             } catch (e: Exception) {
                 android.util.Log.e("HourBoundary", "Error processing hour boundary", e)
             } finally {
-                pendingResult.finish()
+                pendingResult?.finish()
             }
         }
     }
