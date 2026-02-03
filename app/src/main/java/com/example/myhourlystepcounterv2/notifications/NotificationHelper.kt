@@ -13,6 +13,7 @@ import com.example.myhourlystepcounterv2.StepTrackerConfig
 
 object NotificationHelper {
     private const val CHANNEL_ID = "step_reminder_channel"
+    private const val URGENT_CHANNEL_ID = "step_reminder_urgent_channel"
     private const val NOTIFICATION_ID = 100
     private const val ACHIEVEMENT_NOTIFICATION_ID = 101
 
@@ -52,7 +53,7 @@ object NotificationHelper {
     }
 
     fun sendSecondStepReminderNotification(context: Context, currentSteps: Int) {
-        createReminderNotificationChannel(context)
+        createUrgentReminderNotificationChannel(context)
 
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -65,7 +66,7 @@ object NotificationHelper {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+        val notification = NotificationCompat.Builder(context, URGENT_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(context.getString(R.string.second_reminder_notification_title))
             .setContentText(
@@ -79,7 +80,7 @@ object NotificationHelper {
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
-            .setVibrate(StepTrackerConfig.SECOND_REMINDER_VIBRATION_PATTERN)
+            .setVibrate(StepTrackerConfig.URGENT_REMINDER_VIBRATION_PATTERN)
             .setSound(null) // No sound, vibration only
             .build()
 
@@ -132,6 +133,24 @@ object NotificationHelper {
                 description = descriptionText
                 enableVibration(true)
                 vibrationPattern = StepTrackerConfig.FIRST_REMINDER_VIBRATION_PATTERN
+            }
+
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.createNotificationChannel(channel)
+        }
+    }
+
+    private fun createUrgentReminderNotificationChannel(context: Context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val name = context.getString(R.string.reminder_channel_urgent_name)
+            val descriptionText = context.getString(R.string.reminder_channel_urgent_description)
+            val importance = NotificationManager.IMPORTANCE_HIGH
+
+            val channel = NotificationChannel(URGENT_CHANNEL_ID, name, importance).apply {
+                description = descriptionText
+                enableVibration(true)
+                vibrationPattern = StepTrackerConfig.URGENT_REMINDER_VIBRATION_PATTERN
+                setSound(null, null)
             }
 
             val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

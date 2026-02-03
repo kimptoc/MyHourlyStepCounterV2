@@ -17,9 +17,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
+import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
@@ -37,6 +39,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.example.myhourlystepcounterv2.StepTrackerConfig
 import com.example.myhourlystepcounterv2.data.StepEntity
 import com.example.myhourlystepcounterv2.ui.theme.ActivityHigh
 import com.example.myhourlystepcounterv2.ui.theme.ActivityLow
@@ -213,6 +216,7 @@ fun ActivityBarChart(
 
                 val progress = if (maxSteps > 0) step.stepCount.toFloat() / maxSteps else 0f
                 val activityLevel = getActivityLevel(step.stepCount)
+                val goalReached = step.stepCount >= StepTrackerConfig.STEP_REMINDER_THRESHOLD
 
                 Row(
                     modifier = Modifier
@@ -220,6 +224,13 @@ fun ActivityBarChart(
                         .padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    Icon(
+                        imageVector = if (goalReached) Icons.Filled.Circle else Icons.Outlined.Circle,
+                        contentDescription = if (goalReached) "Goal reached" else "Goal not reached",
+                        tint = if (goalReached) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = timeRange,
                         style = MaterialTheme.typography.labelSmall,

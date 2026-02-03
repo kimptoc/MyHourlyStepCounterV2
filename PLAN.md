@@ -1,5 +1,21 @@
 # CURRENT STATUS & NEXT STEPS (as of 2026-02-03)
 
+## 🟢 UI: History Tab Goal Indicator + Prominent Notifications (Feb 3, 2026)
+
+### Status
+- **Implemented:** ✅ Added goal indicator circles to each Hourly Activity row (filled = goal reached, empty = not reached).
+- **Goal Definition:** Uses `StepTrackerConfig.STEP_REMINDER_THRESHOLD` (currently 250 steps).
+- **Visibility Tuning:** Indicator size increased to 18dp; empty indicator uses `MaterialTheme.colorScheme.outline`.
+- **Notification Persistence:** Foreground service notification channel updated to high-importance `step_counter_channel_v4` with persistent label.
+- **Urgent Buzzer:** 5-minute reminder now uses dedicated urgent channel with triple-buzz vibration (no sound).
+
+### Files Touched
+- `app/src/main/java/com/example/myhourlystepcounterv2/ui/HistoryScreen.kt`
+- `app/src/main/java/com/example/myhourlystepcounterv2/services/StepCounterForegroundService.kt`
+- `app/src/main/java/com/example/myhourlystepcounterv2/notifications/NotificationHelper.kt`
+- `app/src/main/java/com/example/myhourlystepcounterv2/Config.kt`
+- `app/src/main/res/values/strings.xml`
+
 ## 🟢 FIXED: Deduplication Blocking ALL Hour Boundaries (Feb 3, 2026)
 
 ### Status

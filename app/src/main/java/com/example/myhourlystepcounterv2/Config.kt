@@ -55,6 +55,13 @@ object StepTrackerConfig {
     val SECOND_REMINDER_VIBRATION_PATTERN = longArrayOf(0, 400, 200, 400, 200, 400, 200, 400)
 
     /**
+     * Vibration pattern for urgent reminder channel (XX:55).
+     * Triple buzz pattern: [delay, vibrate, pause, vibrate, pause, vibrate]
+     * Total duration: ~900ms with 3 vibrations
+     */
+    val URGENT_REMINDER_VIBRATION_PATTERN = longArrayOf(0, 300, 150, 300, 150, 300)
+
+    /**
      * String representations for display
      */
     const val MORNING_THRESHOLD_DISPLAY = "10:00 AM"

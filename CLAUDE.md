@@ -144,12 +144,14 @@ The app uses **MVVM architecture with Repository pattern** in a single-activity 
 9. **Foreground Service:**
    - **StepCounterForegroundService:** Maintains persistent notification and continuous step tracking
    - Updates notification in real-time with current hour and daily totals
+   - Uses a high-importance persistent notification channel (`step_counter_channel_v4`) for better visibility
    - Handles hour boundary processing when app is in background
    - Manages wake-lock based on user preferences
 
 10. **AlarmManager:**
    - **AlarmScheduler:** Schedules precise alarms for step reminders (XX:50) and hour boundaries (XX:00)
    - **StepReminderReceiver:** BroadcastReceiver that sends step reminder notifications
+   - 5-minute reminder uses a dedicated urgent channel with triple-buzz vibration (no sound)
    - **HourBoundaryReceiver:** BroadcastReceiver that processes hour boundaries and saves data
    - Provides backup scheduling when foreground service isn't running
 
