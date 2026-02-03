@@ -29,12 +29,15 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.TextUnit
 import com.example.myhourlystepcounterv2.StepTrackerConfig
 import com.example.myhourlystepcounterv2.ui.theme.GradientGreenEnd
 import com.example.myhourlystepcounterv2.ui.theme.GradientGreenStart
@@ -57,6 +60,15 @@ fun HomeScreen(
 
     val formattedTime = timeFormatter.format(Date(currentTime))
     val formattedDate = dateFormatter.format(Date(currentTime))
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+
+    val baseTimeFontSize = MaterialTheme.typography.bodyMedium.fontSize
+    val timeFontSize = if (baseTimeFontSize != TextUnit.Unspecified) {
+        baseTimeFontSize * 2
+    } else {
+        28.sp
+    }
 
     // Calculate progress for hourly goal (250 steps from StepTrackerConfig)
     val hourlyGoal = StepTrackerConfig.STEP_REMINDER_THRESHOLD
@@ -71,162 +83,247 @@ fun HomeScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        // Combined Date and Time Display
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(bottom = 16.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Filled.DateRange,
-                contentDescription = "Calendar",
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(16.dp)
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = formattedDate,
-                style = MaterialTheme.typography.bodyMedium,
-                textAlign = TextAlign.Center
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Icon(
-                imageVector = Icons.Filled.Schedule,
-                contentDescription = "Time",
-                tint = MaterialTheme.colorScheme.secondary,
-                modifier = Modifier.size(16.dp)
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = formattedTime,
-                style = MaterialTheme.typography.bodyMedium,
-                textAlign = TextAlign.Center
-            )
-        }
-
-        // Elevated Card for Hourly Steps with Gradient Background
-        ElevatedCard(
-            elevation = CardDefaults.elevatedCardElevation(
-                defaultElevation = 8.dp
-            ),
-            shape = RoundedCornerShape(24.dp),
-            modifier = Modifier.padding(bottom = 16.dp)
-        ) {
-            Box(
+        if (isLandscape) {
+            Row(
                 modifier = Modifier
-                    .background(
-                        brush = Brush.verticalGradient(
-                            colors = listOf(
-                                GradientGreenStart,
-                                GradientGreenEnd
-                            )
-                        )
-                    )
-                    .padding(20.dp),
-                contentAlignment = Alignment.Center
+                    .fillMaxSize(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Column(
-                    horizontalAlignment = Alignment.CenterHorizontally
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.weight(1.1f)
                 ) {
-                    // Icon
-                    Icon(
-                        imageVector = Icons.Filled.Star,
-                        contentDescription = "Steps",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .size(32.dp)
-                            .padding(bottom = 12.dp)
-                    )
-
-                    Text(
-                        text = "Steps This Hour",
-                        style = MaterialTheme.typography.titleMedium,
-                        textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(bottom = 12.dp)
-                    )
-
-                    // Circular Progress Ring with Step Count
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.size(160.dp)
-                    ) {
-                        // Background circle
-                        CircularProgressIndicator(
-                            progress = { 1f },
-                            modifier = Modifier.size(160.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            strokeWidth = 10.dp,
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Filled.DateRange,
+                            contentDescription = "Calendar",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp)
                         )
-                        // Progress circle
-                        CircularProgressIndicator(
-                            progress = { progress },
-                            modifier = Modifier.size(160.dp),
-                            color = MaterialTheme.colorScheme.primary,
-                            strokeWidth = 10.dp,
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = formattedDate,
+                            style = MaterialTheme.typography.bodyMedium,
+                            textAlign = TextAlign.Center
                         )
-                        // Step count in center
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                text = hourlySteps.toString(),
-                                style = MaterialTheme.typography.displayLarge.copy(
-                                    fontSize = 48.sp
-                                ),
-                                textAlign = TextAlign.Center,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                text = "${(progress * 100).toInt()}%",
-                                style = MaterialTheme.typography.bodyMedium,
-                                textAlign = TextAlign.Center,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
                     }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Filled.Schedule,
+                            contentDescription = "Time",
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = formattedTime,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = timeFontSize),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
 
+                HourlyStepsCard(
+                    hourlySteps = hourlySteps,
+                    progress = progress,
+                    hourlyGoal = hourlyGoal,
+                    modifier = Modifier.weight(2f)
+                )
+
+                DailyTotalCard(
+                    dailySteps = dailySteps,
+                    modifier = Modifier
+                        .weight(0.9f)
+                        .padding(end = 16.dp)
+                )
+            }
+        } else {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(bottom = 16.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Filled.DateRange,
+                        contentDescription = "Calendar",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Goal: $hourlyGoal steps",
-                        style = MaterialTheme.typography.bodySmall,
-                        textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 12.dp)
+                        text = formattedDate,
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center
+                    )
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Filled.Schedule,
+                        contentDescription = "Time",
+                        tint = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = formattedTime,
+                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = timeFontSize),
+                        textAlign = TextAlign.Center
                     )
                 }
             }
+
+            // Elevated Card for Hourly Steps with Gradient Background
+            HourlyStepsCard(
+                hourlySteps = hourlySteps,
+                progress = progress,
+                hourlyGoal = hourlyGoal,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
         }
 
-        // Card for Daily Total Steps
-        Card(
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
-            ),
-            shape = RoundedCornerShape(16.dp)
+        if (!isLandscape) {
+            DailyTotalCard(
+                dailySteps = dailySteps
+            )
+        }
+    }
+}
+
+@Composable
+private fun HourlyStepsCard(
+    hourlySteps: Int,
+    progress: Float,
+    hourlyGoal: Int,
+    modifier: Modifier = Modifier
+) {
+    ElevatedCard(
+        elevation = CardDefaults.elevatedCardElevation(
+            defaultElevation = 8.dp
+        ),
+        shape = RoundedCornerShape(24.dp),
+        modifier = modifier,
+        colors = CardDefaults.elevatedCardColors(containerColor = androidx.compose.ui.graphics.Color.Transparent)
+    ) {
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(24.dp))
+                .background(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            GradientGreenStart,
+                            GradientGreenEnd
+                        )
+                    )
+                )
+                .padding(20.dp),
+            contentAlignment = Alignment.Center
         ) {
-            Row(
-                modifier = Modifier.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Icon(
-                    imageVector = Icons.AutoMirrored.Filled.DirectionsWalk,
-                    contentDescription = "Daily Total",
-                    tint = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.size(28.dp)
+                    imageVector = Icons.Filled.Star,
+                    contentDescription = "Steps",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .padding(bottom = 12.dp)
                 )
-                Spacer(modifier = Modifier.width(12.dp))
-                Column {
-                    Text(
-                        text = "Total Steps Today",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+
+                Text(
+                    text = "Steps This Hour",
+                    style = MaterialTheme.typography.titleMedium,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier.size(160.dp)
+                ) {
+                    CircularProgressIndicator(
+                        progress = { 1f },
+                        modifier = Modifier.size(160.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        strokeWidth = 10.dp,
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = dailySteps.toString(),
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = MaterialTheme.colorScheme.secondary
+                    CircularProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.size(160.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        strokeWidth = 10.dp,
                     )
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = hourlySteps.toString(),
+                            style = MaterialTheme.typography.displayLarge.copy(
+                                fontSize = 48.sp
+                            ),
+                            textAlign = TextAlign.Center,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "${(progress * 100).toInt()}%",
+                            style = MaterialTheme.typography.bodyMedium,
+                            textAlign = TextAlign.Center,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
+
+                Text(
+                    text = "Goal: $hourlyGoal steps",
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 12.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DailyTotalCard(
+    dailySteps: Int,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        ),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.DirectionsWalk,
+                contentDescription = "Daily Total",
+                tint = MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.size(28.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column {
+                Text(
+                    text = "Total Steps Today",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = dailySteps.toString(),
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.secondary
+                )
             }
         }
     }

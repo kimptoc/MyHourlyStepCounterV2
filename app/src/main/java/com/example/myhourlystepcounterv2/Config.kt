@@ -57,9 +57,9 @@ object StepTrackerConfig {
     /**
      * Vibration pattern for urgent reminder channel (XX:55).
      * Triple buzz pattern: [delay, vibrate, pause, vibrate, pause, vibrate]
-     * Total duration: ~900ms with 3 vibrations
+     * Total duration: ~1850ms with 3 vibrations
      */
-    val URGENT_REMINDER_VIBRATION_PATTERN = longArrayOf(0, 300, 150, 300, 150, 300)
+    val URGENT_REMINDER_VIBRATION_PATTERN = longArrayOf(0, 600, 200, 600, 200, 600)
 
     /**
      * String representations for display
