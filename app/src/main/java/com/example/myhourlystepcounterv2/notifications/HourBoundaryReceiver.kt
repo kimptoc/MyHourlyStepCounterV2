@@ -54,22 +54,22 @@ class HourBoundaryReceiver(
 
         CoroutineScope(Dispatchers.Default + SupervisorJob()).launch {
             try {
-                val preferences = stepPreferences ?: StepPreferences(context.applicationContext)
-                val previousHourTimestamp = preferences.currentHourTimestamp.first()
-                val lastProcessed = preferences.lastProcessedBoundaryTimestamp.first()
-
-                // Deduplication: Skip if this hour was already processed
-                if (previousHourTimestamp > 0 && previousHourTimestamp <= lastProcessed) {
-                    android.util.Log.d("HourBoundary", "✓ CHECK: Hour $previousHourTimestamp already processed, skipping missed check")
-                    return@launch
-                }
-
                 // Calculate current hour timestamp
                 val currentHourTimestamp = Calendar.getInstance().apply {
                     set(Calendar.MINUTE, 0)
                     set(Calendar.SECOND, 0)
                     set(Calendar.MILLISECOND, 0)
                 }.timeInMillis
+
+                val preferences = stepPreferences ?: StepPreferences(context.applicationContext)
+                val previousHourTimestamp = preferences.currentHourTimestamp.first()
+                val lastProcessed = preferences.lastProcessedBoundaryTimestamp.first()
+
+                // Deduplication: Skip if THIS hour was already processed
+                if (currentHourTimestamp <= lastProcessed) {
+                    android.util.Log.d("HourBoundary", "✓ CHECK: Current hour $currentHourTimestamp already processed, skipping missed check")
+                    return@launch
+                }
 
                 // Check if we're past the saved hour
                 if (previousHourTimestamp > 0 && previousHourTimestamp < currentHourTimestamp) {
@@ -134,9 +134,9 @@ class HourBoundaryReceiver(
                 val previousHourTimestamp = preferences.currentHourTimestamp.first()
                 val lastProcessed = preferences.lastProcessedBoundaryTimestamp.first()
 
-                // Deduplication: Skip if this hour was already processed
-                if (previousHourTimestamp > 0 && previousHourTimestamp <= lastProcessed) {
-                    android.util.Log.d("HourBoundary", "processHourBoundary: Hour $previousHourTimestamp already processed, skipping")
+                // Deduplication: Skip if THIS hour was already processed
+                if (currentHourTimestamp <= lastProcessed) {
+                    android.util.Log.d("HourBoundary", "processHourBoundary: Current hour $currentHourTimestamp already processed, skipping")
                     return@launch
                 }
 
@@ -189,7 +189,8 @@ class HourBoundaryReceiver(
                 }
 
                 // Mark as processed BEFORE async operations to prevent races
-                preferences.saveLastProcessedBoundaryTimestamp(previousHourTimestamp)
+                // Store the CURRENT boundary timestamp to prevent double processing
+                preferences.saveLastProcessedBoundaryTimestamp(currentHourTimestamp)
 
                 // Save the completed previous hour to database
                 android.util.Log.i(

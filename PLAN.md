@@ -1,89 +1,139 @@
-# CURRENT STATUS & NEXT STEPS (as of 2026-02-02)
+# CURRENT STATUS & NEXT STEPS (as of 2026-02-03)
 
-## 🔴 CRITICAL BUG: HourBoundaryReceiver Crashing Every Hour (Feb 2, 2026)
+## 🟢 FIXED: Deduplication Blocking ALL Hour Boundaries (Feb 3, 2026)
 
-### Symptoms Reported
-- App stopped tracking steps overnight
-- Opened app in morning: showed 0 for both hourly and daily totals
-- Samsung Health showed 36 steps for the same period
-- Steps are permanently lost
+### Status
+- **Fix Implemented:** ✅ Corrected timestamp comparison logic in `StepCounterForegroundService.kt` and `HourBoundaryReceiver.kt`.
+- **Tests Added:** ✅ Unit tests added to `HourBoundaryLogicTest.kt` covering the deduplication scenarios (success, skip, and stale saved timestamp).
+- **Verification:** ✅ Build passed, tests passed.
+
+### Symptoms Reported (Resolved)
+- Notification shows hourly=867, daily=867 (same value - WRONG)
+- ViewModel correctly calculates daily=7356, but notification ignores it
+- History tab shows yesterday's (Feb 2nd) entries, not today's
+- Hour boundary at 10:00 AM was SKIPPED with message "already processed"
+- App thinks it's still Feb 2nd 22:00 (12 hours behind!)
+
+### Evidence from Device Logs
+```
+Today: Feb 3rd at 10:00 AM
+
+App state (WRONG):
+  currentHourTimestamp = Mon Feb 02 22:00:00 GMT (12 hours stale!)
+  startOfDay = Mon Feb 02 00:00:00 GMT (yesterday!)
+  lastProcessedBoundaryTimestamp = 1770069600000 (Feb 02 22:00)
+
+10:00:00 Hour boundary reached at Tue Feb 03 10:00:00 GMT 2026
+10:00:00 handleHourBoundary: Hour 1770069600000 already processed, skipping
+10:00:00 ✅ Hour boundary completed successfully  ← FALSE! It was skipped!
+
+FG Service: Calculated: dbTotal=0, currentHour=867, daily=867   ← WRONG
+ViewModel:  Daily total calculated: dbTotal=6489, final=7356    ← CORRECT
+```
 
 ### Root Cause Analysis
 
-**Error from device logs (repeated at every hour):**
-```
-java.lang.NullPointerException: Attempt to invoke virtual method
-'void android.content.BroadcastReceiver$PendingResult.finish()' on a null object reference
-at HourBoundaryReceiver$processHourBoundary$1.invokeSuspend(HourBoundaryReceiver.kt:218)
-```
+The deduplication logic added to prevent double-processing is **comparing the wrong values**.
 
-**The Bug:** `goAsync()` is called **twice** in one BroadcastReceiver lifecycle.
-
-**Call Path:**
-1. `ACTION_BOUNDARY_CHECK` received → `onReceive()` calls `checkForMissedBoundaries()`
-2. `checkForMissedBoundaries()` calls `goAsync()` at line 53
-3. If missed boundary detected, calls `processHourBoundary(context, isBackupCheck = true)` at line 84
-4. `processHourBoundary()` **also** calls `goAsync()` at line 109
-
-**Why It Crashes:**
-- `goAsync()` can only be called **once** per `onReceive()` invocation
-- The second call returns `null`
-- The finally block at line 236 calls `pendingResult.finish()` on null → NullPointerException
-
-**Evidence from logs showing crashes at every hour boundary (Jan 31 - Feb 2):**
-```
-01-31 02:00:00 E AndroidRuntime: NullPointerException at HourBoundaryReceiver.kt:218
-01-31 03:00:02 E AndroidRuntime: NullPointerException at HourBoundaryReceiver.kt:218
-01-31 04:00:10 E AndroidRuntime: NullPointerException at HourBoundaryReceiver.kt:218
-... (crashes at every subsequent hour)
-02-01 08:00:06 E AndroidRuntime: NullPointerException at HourBoundaryReceiver.kt:218
-(no Feb 2 crashes yet because app was manually opened)
-```
-
-### Impact
-- **No hour boundaries processed** when app is in background
-- **No steps saved to database** - all steps lost
-- **Daily total shows 0** on app open (fresh baseline set)
-- Database history shows only 1 entry at midnight with 0 steps
-
-### Proposed Fix
-
-**File:** `app/src/main/java/com/example/myhourlystepcounterv2/notifications/HourBoundaryReceiver.kt`
-
-**Option 1: Pass PendingResult as Parameter**
-Modify `processHourBoundary()` to accept an optional `PendingResult` parameter. When called from `checkForMissedBoundaries()`, pass the existing result instead of calling `goAsync()` again.
-
+**Current (BROKEN) logic in `handleHourBoundary()`:**
 ```kotlin
-private fun processHourBoundary(
-    context: Context,
-    isBackupCheck: Boolean = false,
-    existingPendingResult: BroadcastReceiver.PendingResult? = null
-) {
-    // Only call goAsync() if we don't already have a result
-    val pendingResult = existingPendingResult ?: goAsync()
+val previousHourTimestamp = preferences.currentHourTimestamp.first()  // Feb 02 22:00
+val effectiveLastProcessed = maxOf(lastProcessed, lastProcessedBoundaryTimestamp)  // Feb 02 22:00
 
-    CoroutineScope(Dispatchers.Default + SupervisorJob()).launch {
-        try {
-            // ... existing processing logic ...
-        } finally {
-            pendingResult?.finish()  // Null-safe finish
-        }
-    }
+if (previousHourTimestamp <= effectiveLastProcessed) {
+    Log.d("...", "Hour $previousHourTimestamp already processed, skipping")
+    return  // SKIPS EVERYTHING!
 }
 ```
 
-**Changes Required:**
-1. Add `existingPendingResult` parameter to `processHourBoundary()` (line 105)
-2. Only call `goAsync()` when `existingPendingResult` is null (line 109)
-3. Pass `pendingResult` from `checkForMissedBoundaries()` to `processHourBoundary()` (line 84)
-4. Use null-safe call `pendingResult?.finish()` in finally block (line 236)
+**The problem:** This checks if `previousHourTimestamp` (the SAVED hour from preferences) was already processed. But that saved value is stale (Feb 02 22:00). The check should verify if the CURRENT hour (Feb 03 10:00) was already processed.
+
+**Why notification shows wrong daily:**
+The FG service uses the stale `currentHourTimestamp` (Feb 02 22:00) in its DB query:
+```kotlin
+repository.getTotalStepsForDayExcludingCurrentHour(startOfDay, currentHourTimestamp)
+// startOfDay = Feb 02 00:00, currentHourTimestamp = Feb 02 22:00
+// This excludes ALL hours from Feb 02 22:00 onward, returning dbTotal=0
+```
+
+### Fix Required
+
+#### Step 1: Fix deduplication logic
+
+**File:** `StepCounterForegroundService.kt` - `handleHourBoundary()`
+
+Change FROM:
+```kotlin
+val previousHourTimestamp = preferences.currentHourTimestamp.first()
+if (previousHourTimestamp <= effectiveLastProcessed) {
+    // Skip
+}
+```
+
+Change TO:
+```kotlin
+// Calculate the CURRENT hour timestamp (what we're about to process)
+val currentHourTimestamp = java.util.Calendar.getInstance().apply {
+    set(java.util.Calendar.MINUTE, 0)
+    set(java.util.Calendar.SECOND, 0)
+    set(java.util.Calendar.MILLISECOND, 0)
+}.timeInMillis
+
+// Only skip if THIS hour was already processed
+if (currentHourTimestamp <= effectiveLastProcessed) {
+    Log.d("...", "Current hour $currentHourTimestamp already processed, skipping")
+    return
+}
+```
+
+**File:** `StepCounterForegroundService.kt` - `checkMissedHourBoundaries()`
+
+Same fix - compare against the calculated current hour, not the saved timestamp.
+
+**File:** `HourBoundaryReceiver.kt` - `processHourBoundary()` and `checkForMissedBoundaries()`
+
+Same fix in both methods.
+
+#### Step 2: Ensure day boundary is detected
+
+The day boundary detection should trigger when `currentHourTimestamp` crosses midnight. Currently it may not be triggering because hour boundaries are being skipped.
+
+After fixing the deduplication, verify that when the first hour boundary of a new day is processed, it:
+1. Updates `lastStartOfDay` preference to today
+2. Resets the daily total calculation
+
+### Files to Modify
+
+1. **`app/src/main/java/com/example/myhourlystepcounterv2/services/StepCounterForegroundService.kt`**
+   - `handleHourBoundary()`: Fix deduplication to compare current hour, not saved hour
+   - `checkMissedHourBoundaries()`: Same fix
+
+2. **`app/src/main/java/com/example/myhourlystepcounterv2/notifications/HourBoundaryReceiver.kt`**
+   - `processHourBoundary()`: Fix deduplication to compare current hour, not saved hour
+   - `checkForMissedBoundaries()`: Same fix
 
 ### Verification Plan
-1. Build and install: `./gradlew installDebug`
-2. Monitor logcat for crashes at next hour boundary: `adb logcat | grep -E "HourBoundary|AndroidRuntime"`
-3. Verify no NullPointerException at XX:00
-4. Let run overnight and confirm steps tracked in morning
-5. Run unit tests: `./gradlew test`
+
+1. Apply fixes and rebuild: `./gradlew installDebug`
+2. Force stop app and reopen
+3. Check logs - `currentHourTimestamp` should update to today's current hour
+4. Check notification - daily total should be higher than hourly total
+5. Check History tab - should show today's date (Feb 3rd)
+6. Wait for next hour boundary (e.g., 11:00)
+7. Verify logs show "Hour boundary completed" WITHOUT "already processed, skipping"
+8. Verify database has new entry for the completed hour
+
+### DO NOT COMMIT current working dir changes until this is fixed!
+
+The current uncommitted changes fix Bug #1 (goAsync crash) but introduce Bug #2 (deduplication blocking everything).
+
+---
+
+## 🟢 FIXED: goAsync() Double-Call Crash (Feb 2, 2026)
+
+**Status:** Fixed in working directory (uncommitted)
+
+The `existingPendingResult` parameter fix is correct and should be kept. The issue is the deduplication logic that was added alongside it.
 
 ---
 

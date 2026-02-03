@@ -215,24 +215,25 @@ class StepCounterForegroundService : android.app.Service() {
      */
     private suspend fun checkMissedHourBoundaries() {
         try {
-            val savedHourTimestamp = preferences.currentHourTimestamp.first()
-            val lastProcessed = preferences.lastProcessedBoundaryTimestamp.first()
-            val effectiveLastProcessed = maxOf(lastProcessed, lastProcessedBoundaryTimestamp)
-            
-            // Deduplication: Skip if this hour was already processed
-            if (savedHourTimestamp > 0 && savedHourTimestamp <= effectiveLastProcessed) {
-                android.util.Log.d(
-                    "StepCounterFGSvc",
-                    "checkMissedHourBoundaries: Hour $savedHourTimestamp already processed (effectiveLast=$effectiveLastProcessed), skipping"
-                )
-                return
-            }
-
+            // Calculate current hour timestamp (what we're about to process)
             val currentHourTimestamp = java.util.Calendar.getInstance().apply {
                 set(java.util.Calendar.MINUTE, 0)
                 set(java.util.Calendar.SECOND, 0)
                 set(java.util.Calendar.MILLISECOND, 0)
             }.timeInMillis
+
+            val savedHourTimestamp = preferences.currentHourTimestamp.first()
+            val lastProcessed = preferences.lastProcessedBoundaryTimestamp.first()
+            val effectiveLastProcessed = maxOf(lastProcessed, lastProcessedBoundaryTimestamp)
+            
+            // Deduplication: Skip if THIS hour was already processed
+            if (currentHourTimestamp <= effectiveLastProcessed) {
+                android.util.Log.d(
+                    "StepCounterFGSvc",
+                    "checkMissedHourBoundaries: Current hour $currentHourTimestamp already processed (effectiveLast=$effectiveLastProcessed), skipping"
+                )
+                return
+            }
 
             if (savedHourTimestamp > 0 && savedHourTimestamp < currentHourTimestamp) {
                 val hoursDifference = (currentHourTimestamp - savedHourTimestamp) / (60 * 60 * 1000)
@@ -337,16 +338,23 @@ class StepCounterForegroundService : android.app.Service() {
      */
     private suspend fun handleHourBoundary() {
         try {
+            // Calculate current hour timestamp (what we're about to process)
+            val currentHourTimestamp = java.util.Calendar.getInstance().apply {
+                set(java.util.Calendar.MINUTE, 0)
+                set(java.util.Calendar.SECOND, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+            }.timeInMillis
+
             // Get the PREVIOUS hour's data that needs to be saved
             val previousHourTimestamp = preferences.currentHourTimestamp.first()
             val lastProcessed = preferences.lastProcessedBoundaryTimestamp.first()
             val effectiveLastProcessed = maxOf(lastProcessed, lastProcessedBoundaryTimestamp)
             
-            // Deduplication: Skip if this hour was already processed
-            if (previousHourTimestamp > 0 && previousHourTimestamp <= effectiveLastProcessed) {
+            // Deduplication: Skip if THIS hour was already processed
+            if (currentHourTimestamp <= effectiveLastProcessed) {
                 android.util.Log.d(
                     "StepCounterFGSvc",
-                    "handleHourBoundary: Hour $previousHourTimestamp already processed (effectiveLast=$effectiveLastProcessed), skipping"
+                    "handleHourBoundary: Current hour $currentHourTimestamp already processed (effectiveLast=$effectiveLastProcessed), skipping"
                 )
                 return
             }
@@ -380,8 +388,9 @@ class StepCounterForegroundService : android.app.Service() {
             }
 
             // Mark as processed BEFORE async operations to prevent races
-            preferences.saveLastProcessedBoundaryTimestamp(previousHourTimestamp)
-            lastProcessedBoundaryTimestamp = previousHourTimestamp
+            // Store the CURRENT boundary timestamp to prevent double processing
+            preferences.saveLastProcessedBoundaryTimestamp(currentHourTimestamp)
+            lastProcessedBoundaryTimestamp = currentHourTimestamp
 
             // Save the completed previous hour to database
             android.util.Log.i(
@@ -389,13 +398,6 @@ class StepCounterForegroundService : android.app.Service() {
                 "Saving completed hour: timestamp=$previousHourTimestamp (${java.util.Date(previousHourTimestamp)}), steps=$stepsInPreviousHour (device=$deviceTotal - baseline=$previousHourStartStepCount)"
             )
             repository.saveHourlySteps(previousHourTimestamp, stepsInPreviousHour)
-
-            // Calculate current hour timestamp
-            val currentHourTimestamp = java.util.Calendar.getInstance().apply {
-                set(java.util.Calendar.MINUTE, 0)
-                set(java.util.Calendar.SECOND, 0)
-                set(java.util.Calendar.MILLISECOND, 0)
-            }.timeInMillis
 
             android.util.Log.i(
                 "StepCounterFGSvc",

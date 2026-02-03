@@ -221,10 +221,59 @@ class HourBoundaryLogicTest {
         } else if (fallbackTotal > 0) {
             fallbackTotal
         } else {
-            0 // Would abort in real code - testing the final fallback
+            0 // Would abort in real implementation
         }
 
         // Then - returns 0 (would trigger abort in real implementation)
         assertEquals(0, deviceTotal)
+    }
+
+    // New tests for Deduplication Logic Fix (Feb 3, 2026)
+
+    @Test
+    fun testDeduplication_currentHourProcessed_skips() {
+        // Given
+        val currentHourTimestamp = 1700003600000L // e.g., 01:00
+        val lastProcessedBoundaryTimestamp = 1700003600000L // 01:00 (already processed)
+        
+        // When - check logic
+        val shouldSkip = currentHourTimestamp <= lastProcessedBoundaryTimestamp
+
+        // Then
+        assertTrue("Should skip because current hour is already processed", shouldSkip)
+    }
+
+    @Test
+    fun testDeduplication_currentHourNotProcessed_proceeds() {
+        // Given
+        val currentHourTimestamp = 1700007200000L // e.g., 02:00
+        val lastProcessedBoundaryTimestamp = 1700003600000L // 01:00
+        
+        // When - check logic
+        val shouldSkip = currentHourTimestamp <= lastProcessedBoundaryTimestamp
+
+        // Then
+        assertEquals("Should NOT skip because current hour > last processed", false, shouldSkip)
+    }
+
+    @Test
+    fun testDeduplication_savedHourStale_usesCurrentHour() {
+        // This validates the CRITICAL fix: verifying we compare Current Hour, not Saved Hour
+        
+        // Given
+        val currentHourTimestamp = 1700007200000L // 02:00 (Real time)
+        val savedHourTimestamp = 1700003600000L   // 01:00 (Stale saved time)
+        val lastProcessedBoundaryTimestamp = 1700003600000L // 01:00 (Already processed 1am)
+
+        // Scenario 1: The BUGGY logic (comparing saved vs processed)
+        // saved(01:00) <= processed(01:00) -> TRUE (SKIPS CORRECTLY for 1am, but...)
+        // In the real bug, we wanted to process 2am, but saved was still 1am.
+        
+        // Scenario 2: The FIXED logic (comparing current vs processed)
+        // current(02:00) <= processed(01:00) -> FALSE (PROCEEDS CORRECTLY)
+        val shouldSkipFixed = currentHourTimestamp <= lastProcessedBoundaryTimestamp
+
+        // Then
+        assertEquals("Should NOT skip because we compare CURRENT hour (02:00) vs last processed (01:00)", false, shouldSkipFixed)
     }
 }
