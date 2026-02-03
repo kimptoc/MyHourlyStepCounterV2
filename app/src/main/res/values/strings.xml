@@ -2,8 +2,8 @@
     <string name="app_name">MyHourlyStepCounterV2</string>
 
     <!-- Notification strings -->
-    <string name="notification_channel_name">Step counter</string>
-    <string name="notification_channel_description">Shows current hour steps and daily total while counting in background</string>
+    <string name="notification_channel_name">Step counter (persistent)</string>
+    <string name="notification_channel_description">Keeps a persistent notification with current-hour steps and daily total while counting in the background.</string>
     <string name="notification_title">%1$s</string>
     <string name="notification_text_steps">This hour: %1$d — Today: %2$d</string>
     <string name="notification_action_stop">Stop</string>

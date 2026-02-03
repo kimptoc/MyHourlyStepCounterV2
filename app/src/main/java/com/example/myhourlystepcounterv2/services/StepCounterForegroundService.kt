@@ -28,7 +28,7 @@ import com.example.myhourlystepcounterv2.StepTrackerConfig
 
 class StepCounterForegroundService : android.app.Service() {
     companion object {
-        const val CHANNEL_ID = "step_counter_channel_v3"
+        const val CHANNEL_ID = "step_counter_channel_v4"
         const val NOTIFICATION_ID = 42
         const val ACTION_STOP = "com.example.myhourlystepcounterv2.ACTION_STOP_FOREGROUND"
     }
@@ -161,7 +161,8 @@ class StepCounterForegroundService : android.app.Service() {
             .setContentText(text)
             .setOngoing(true)
             .setContentIntent(openAppPending)
-            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOnlyAlertOnce(true)
             .setSilent(true)
@@ -172,7 +173,7 @@ class StepCounterForegroundService : android.app.Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val name = getString(R.string.notification_channel_name)
             val descriptionText = getString(R.string.notification_channel_description)
-            val importance = NotificationManager.IMPORTANCE_DEFAULT
+            val importance = NotificationManager.IMPORTANCE_HIGH
             val channel = NotificationChannel(CHANNEL_ID, name, importance).apply {
                 description = descriptionText
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
