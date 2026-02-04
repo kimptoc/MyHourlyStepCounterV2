@@ -616,88 +616,111 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
             set(Calendar.MILLISECOND, 0)
         }.timeInMillis
 
-        // Check if this is first UI open of the day
-        val isFirstOpenOfDay = lastOpenDate != currentStartOfDay
-
-        if (!isFirstOpenOfDay) {
-            android.util.Log.d("StepCounter", "handleUiResumeClosure: Not first open today, skipping closure detection")
-            return
+        val savedHourTimestamp = preferences.currentHourTimestamp.first()
+        val hoursDifference = if (savedHourTimestamp > 0) {
+            (currentHourTimestamp - savedHourTimestamp) / (60 * 60 * 1000)
+        } else {
+            0
         }
+        val shouldCheckMissedHours = savedHourTimestamp > 0 && hoursDifference >= 1
 
         val savedDeviceTotal = preferences.totalStepsDevice.first()
-        val savedHourTimestamp = preferences.currentHourTimestamp.first()
+        val previousHourStartSteps = preferences.hourStartStepCount.first()
         val stepsWhileClosed = currentDeviceTotal - savedDeviceTotal
         val currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
         val isEarlyMorning = currentHour < StepTrackerConfig.MORNING_THRESHOLD_HOUR
 
         android.util.Log.i(
             "StepCounter",
-            "handleUiResumeClosure: FIRST UI OPEN TODAY detected! " +
+            "handleUiResumeClosure: UI resume check. " +
                     "lastOpenDate=${if (lastOpenDate > 0) java.util.Date(lastOpenDate) else "never"}, " +
                     "today=${java.util.Date(currentStartOfDay)}, " +
-                    "stepsWhileClosed=$stepsWhileClosed, currentHour=$currentHour"
+                    "savedHour=${if (savedHourTimestamp > 0) java.util.Date(savedHourTimestamp) else "none"}, " +
+                    "hoursDifference=$hoursDifference, stepsWhileClosed=$stepsWhileClosed, currentHour=$currentHour"
         )
 
-        if (stepsWhileClosed > 10 && savedHourTimestamp > 0 && savedHourTimestamp < currentStartOfDay) {
-            // App was closed across a day boundary with significant steps
+        if (!shouldCheckMissedHours) {
+            android.util.Log.d(
+                "StepCounter",
+                "handleUiResumeClosure: No missed-hour gap detected (hoursDifference=$hoursDifference). Skipping backfill."
+            )
+        } else {
+            // App was closed across one or more hours (possibly across day boundary)
             android.util.Log.i(
                 "StepCounter",
-                "UI CLOSURE PERIOD: Distributing $stepsWhileClosed steps. earlyMorning=$isEarlyMorning"
+                "UI CLOSURE PERIOD: Evaluating missed hours from ${java.util.Date(savedHourTimestamp)} to ${java.util.Date(currentHourTimestamp)}"
             )
 
-            if (isEarlyMorning) {
-                // Early morning (before 10am): put all steps in current hour
-                val stepsClamped = minOf(stepsWhileClosed, StepTrackerConfig.MAX_STEPS_PER_HOUR)
-                android.util.Log.i("StepCounter", "Early morning UI resume: SAVING $stepsClamped steps to current hour ${java.util.Date(currentHourTimestamp)}")
-
-                repository.saveHourlySteps(currentHourTimestamp, stepsClamped)
-
-                // Verify save
-                val saved = repository.getStepForHour(currentHourTimestamp)
-                android.util.Log.i("StepCounter", "Early morning UI resume: Verified DB has ${saved?.stepCount ?: 0} steps for current hour")
+            // Validate savedDeviceTotal (reuse earlier bug guard)
+            val validSavedDeviceTotal = if (savedDeviceTotal == 0 && previousHourStartSteps > 0) {
+                android.util.Log.w(
+                    "StepCounter",
+                    "DETECTED BUG in UI resume logic: savedDeviceTotal=0 but hourStartStepCount=$previousHourStartSteps. " +
+                            "Using hourStartStepCount as fallback."
+                )
+                previousHourStartSteps
             } else {
-                // Later in day: distribute steps evenly across waking hours (threshold onwards)
-                val hoursAwake = currentHour - StepTrackerConfig.MORNING_THRESHOLD_HOUR
-                if (hoursAwake > 0) {
-                    val stepsPerHour = stepsWhileClosed / hoursAwake
+                savedDeviceTotal
+            }
+
+            val totalStepsWhileClosed = currentDeviceTotal - validSavedDeviceTotal
+            if (totalStepsWhileClosed <= 0) {
+                android.util.Log.w(
+                    "StepCounter",
+                    "UI resume: totalStepsWhileClosed=$totalStepsWhileClosed (no positive delta). Skipping backfill."
+                )
+            } else {
+                val missingHours = mutableListOf<Long>()
+                var accountedSteps = 0
+                var hourCursor = savedHourTimestamp
+                val hourCount = hoursDifference.toInt()
+
+                for (i in 0 until hourCount) {
+                    if (i < hourCount - 1) { // exclude current hour
+                        val hourTs = hourCursor
+                        if (hourTs >= currentStartOfDay && hourTs < currentHourTimestamp) {
+                            val existing = repository.getStepForHour(hourTs)
+                            if (existing != null) {
+                                accountedSteps += existing.stepCount
+                            } else {
+                                missingHours.add(hourTs)
+                            }
+                        }
+                        hourCursor += (60 * 60 * 1000)
+                    }
+                }
+
+                val remainingSteps = totalStepsWhileClosed - accountedSteps
+                if (missingHours.isEmpty()) {
                     android.util.Log.i(
                         "StepCounter",
-                        "Later in day UI resume: distributing $stepsWhileClosed steps across $hoursAwake hours (~$stepsPerHour/hour)"
+                        "UI resume: No missing hours detected in range; accountedSteps=$accountedSteps, totalStepsWhileClosed=$totalStepsWhileClosed"
+                    )
+                } else if (remainingSteps <= 0) {
+                    android.util.Log.w(
+                        "StepCounter",
+                        "UI resume: Remaining steps ($remainingSteps) <= 0 after accounting for existing hours. Skipping backfill."
+                    )
+                } else {
+                    val stepsPerHour = remainingSteps / missingHours.size
+                    android.util.Log.i(
+                        "StepCounter",
+                        "UI resume: Backfilling ${missingHours.size} missing hours with $remainingSteps steps (~$stepsPerHour/hour)"
                     )
 
-                    // Save distributed steps for hours from threshold to now
-                    val distributedHours = mutableListOf<Long>()
-
-                    for (hour in 0 until hoursAwake) {
-                        // Create fresh calendar for each hour to avoid accumulation
-                        val hourCalendar = Calendar.getInstance().apply {
-                            set(Calendar.HOUR_OF_DAY, StepTrackerConfig.MORNING_THRESHOLD_HOUR + hour)
-                            set(Calendar.MINUTE, 0)
-                            set(Calendar.SECOND, 0)
-                            set(Calendar.MILLISECOND, 0)
-                        }
-                        val hourTimestamp = hourCalendar.timeInMillis
-
+                    for (hourTs in missingHours) {
                         val stepsClamped = minOf(stepsPerHour, StepTrackerConfig.MAX_STEPS_PER_HOUR)
-                        android.util.Log.i("StepCounter", "UI CLOSURE DISTRIBUTION: Saving hour ${StepTrackerConfig.MORNING_THRESHOLD_HOUR + hour}:00 (${java.util.Date(hourTimestamp)}) ← $stepsClamped steps")
-
-                        repository.saveHourlySteps(hourTimestamp, stepsClamped)
-                        distributedHours.add(hourTimestamp)
-                    }
-
-                    // Verify all saves committed
-                    android.util.Log.i("StepCounter", "UI CLOSURE DISTRIBUTION COMPLETE: Verifying ${distributedHours.size} hours...")
-                    for ((index, hourTs) in distributedHours.withIndex()) {
-                        val saved = repository.getStepForHour(hourTs)
-                        val hourNum = StepTrackerConfig.MORNING_THRESHOLD_HOUR + index
-                        android.util.Log.i("StepCounter", "  ✓ Hour $hourNum:00 → DB has ${saved?.stepCount ?: 0} steps")
+                        android.util.Log.i(
+                            "StepCounter",
+                            "UI BACKFILL: Saving hour ${java.util.Date(hourTs)} ← $stepsClamped steps"
+                        )
+                        repository.saveHourlySteps(hourTs, stepsClamped)
                     }
                 }
             }
 
             // Update current hour baseline after distribution
             // Only update if we're in a new hour compared to the saved timestamp
-            val savedHourTimestamp = preferences.currentHourTimestamp.first()
             if (currentHourTimestamp != savedHourTimestamp) {
                 // Hour changed - set new baseline
                 android.util.Log.i("StepCounter", "Post-UI-closure-distribution: Setting new hour baseline to $currentDeviceTotal (hour changed from ${java.util.Date(savedHourTimestamp)} to ${java.util.Date(currentHourTimestamp)})")

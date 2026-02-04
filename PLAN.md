@@ -16,6 +16,47 @@
 - `app/src/main/java/com/example/myhourlystepcounterv2/Config.kt`
 - `app/src/main/res/values/strings.xml`
 
+## 🟡 INVESTIGATE: Missing Midnight Hour (Feb 4, 2026)
+
+### Symptom
+Today just after 8am:
+- App shows: daily=503, current hour=437, prev hour=54, 1–2am=12, **midnight 00–01 missing**
+- Samsung Health shows: daily=596, current hour=437, prev hour=60, **00–01=87**, 1–2am=12
+
+### Evidence from logs
+- History loaded lacks 00:00 hour:
+  - `History loaded (past hours): 4 entries - ... 07:00: 54, 03:00: 0, 02:00: 0, 01:00: 12`
+- Closure handler skipped backfill:
+  - `handleUiResumeClosure: Not first open today, skipping closure detection`
+
+### Likely Root Cause
+- Midnight boundary was missed (FG service / AlarmManager not triggered or failed).
+- Later app resume **skipped** closure-period backfill because it only runs on "first open today."
+- Net effect: 00:00–01:00 hour never saved; daily total under-counts by ~87 steps.
+
+### Proposed Fix (Task)
+1. **Relax closure/backfill gating**
+   - Run missed-hour detection when there is a **gap >= 1 hour** between `currentHourTimestamp` and `now`, even if not first open today.
+   - Do not rely solely on `lastOpenDate` == today to decide.
+2. **Strengthen midnight handling**
+   - Ensure boundary processing explicitly handles day rollover (00:00) and writes the midnight hour record.
+3. **Add targeted logs**
+   - Log when backfill is **skipped** and why (include timestamps and delta hours).
+   - Log when backfill **runs**, including which hours are written.
+
+### Files to Inspect/Modify
+- `app/src/main/java/com/example/myhourlystepcounterv2/ui/StepCounterViewModel.kt`
+- `app/src/main/java/com/example/myhourlystepcounterv2/services/StepCounterForegroundService.kt`
+- `app/src/main/java/com/example/myhourlystepcounterv2/notifications/HourBoundaryReceiver.kt`
+- `app/src/main/java/com/example/myhourlystepcounterv2/worker/HourBoundaryCheckWorker.kt`
+- `app/src/main/java/com/example/myhourlystepcounterv2/data/StepPreferences.kt`
+
+### Verification Plan
+1. Simulate missed midnight boundary by stopping app before midnight and reopening after 1–2am.
+2. Confirm 00:00–01:00 entry exists in History after reopen.
+3. Verify daily total matches Samsung Health within 1–2 steps (expected sensor variance).
+4. Confirm logs show backfill executed with correct hours.
+
 ## 🟢 FIXED: Deduplication Blocking ALL Hour Boundaries (Feb 3, 2026)
 
 ### Status
