@@ -27,6 +27,7 @@ import java.util.Calendar
 class StepCounterViewModel(private val repository: StepRepository) : ViewModel() {
     private lateinit var sensorManager: StepSensorManager
     private lateinit var preferences: StepPreferences
+    private val uiDbWritesEnabled = false
 
     // Guard to prevent duplicate initialization
     @Volatile
@@ -149,8 +150,7 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
 
                     // Save yesterday's incomplete hour as 0 (assume sleep period)
                     if (savedHourTimestamp > 0) {
-                        repository.saveHourlySteps(savedHourTimestamp, 0)
-                        android.util.Log.d("StepCounter", "Day boundary: Saved 0 steps for yesterday's incomplete hour")
+                        saveHourlyStepsIfEnabled(savedHourTimestamp, 0, "Day boundary: yesterday's incomplete hour")
                     }
                 }
 
@@ -188,11 +188,7 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                             android.util.Log.i("StepCounter", "Early morning: SAVING $stepsClamped steps to current hour ${java.util.Date(currentHourTimestamp)}")
 
                             // CRITICAL FIX: Save to database immediately
-                            repository.saveHourlySteps(currentHourTimestamp, stepsClamped)
-
-                            // Verify save
-                            val saved = repository.getStepForHour(currentHourTimestamp)
-                            android.util.Log.i("StepCounter", "Early morning: Verified DB has ${saved?.stepCount ?: 0} steps for current hour")
+                            saveHourlyStepsIfEnabled(currentHourTimestamp, stepsClamped, "Early morning closure distribution")
                         } else {
                             // Later in day: distribute steps evenly across waking hours (threshold onwards)
                             val hoursAwake = currentHour - StepTrackerConfig.MORNING_THRESHOLD_HOUR
@@ -228,18 +224,22 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                                     android.util.Log.i("StepCounter", "CLOSURE DISTRIBUTION: Saving hour ${StepTrackerConfig.MORNING_THRESHOLD_HOUR + hour}:00 (${java.util.Date(hourTimestamp)}) ← $stepsClamped steps [STARTING]")
 
                                     // CRITICAL FIX: Save synchronously within this coroutine scope (already inside launch from line 80)
-                                    repository.saveHourlySteps(hourTimestamp, stepsClamped)
+                                    saveHourlyStepsIfEnabled(
+                                        hourTimestamp,
+                                        stepsClamped,
+                                        "Closure distribution hour ${StepTrackerConfig.MORNING_THRESHOLD_HOUR + hour}:00"
+                                    )
                                     distributedHours.add(hourTimestamp)
-
-                                    android.util.Log.i("StepCounter", "CLOSURE DISTRIBUTION: Hour ${StepTrackerConfig.MORNING_THRESHOLD_HOUR + hour}:00 ← $stepsClamped steps [COMMITTED]")
                                 }
 
                                 // CRITICAL FIX: Verify all saves committed
                                 android.util.Log.i("StepCounter", "CLOSURE DISTRIBUTION COMPLETE: Verifying ${distributedHours.size} hours...")
                                 for ((index, hourTs) in distributedHours.withIndex()) {
-                                    val saved = repository.getStepForHour(hourTs)
-                                    val hourNum = StepTrackerConfig.MORNING_THRESHOLD_HOUR + index
-                                    android.util.Log.i("StepCounter", "  ✓ Hour $hourNum:00 → DB has ${saved?.stepCount ?: 0} steps")
+                                    if (uiDbWritesEnabled) {
+                                        val saved = repository.getStepForHour(hourTs)
+                                        val hourNum = StepTrackerConfig.MORNING_THRESHOLD_HOUR + index
+                                        android.util.Log.i("StepCounter", "  ✓ Hour $hourNum:00 → DB has ${saved?.stepCount ?: 0} steps")
+                                    }
                                 }
                             }
                         }
@@ -314,10 +314,10 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
 
                                     // Skip hours that are in the future (shouldn't happen but just in case)
                                     if (currentHourStart < currentHourTimestamp) {
-                                        repository.saveHourlySteps(currentHourStart, stepsForHour)
-                                        android.util.Log.d(
-                                            "StepCounter",
-                                            "Retroactively saved $stepsForHour steps for hour: ${java.util.Date(currentHourStart)}"
+                                        saveHourlyStepsIfEnabled(
+                                            currentHourStart,
+                                            stepsForHour,
+                                            "Retroactive missed-hour save"
                                         )
                                     }
 
@@ -338,8 +338,7 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                                 stepsInPreviousHour = 10000
                             }
 
-                            repository.saveHourlySteps(savedHourTimestamp, stepsInPreviousHour)
-                            android.util.Log.d("StepCounter", "App startup: Saved $stepsInPreviousHour steps for previous hour")
+                            saveHourlyStepsIfEnabled(savedHourTimestamp, stepsInPreviousHour, "App startup previous hour save")
                         }
                     }
 
@@ -714,7 +713,7 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                             "StepCounter",
                             "UI BACKFILL: Saving hour ${java.util.Date(hourTs)} ← $stepsClamped steps"
                         )
-                        repository.saveHourlySteps(hourTs, stepsClamped)
+                        saveHourlyStepsIfEnabled(hourTs, stepsClamped, "UI backfill hour ${java.util.Date(hourTs)}")
                     }
                 }
             }
@@ -758,5 +757,16 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }.timeInMillis
+    }
+
+    private suspend fun saveHourlyStepsIfEnabled(timestamp: Long, steps: Int, reason: String) {
+        if (!uiDbWritesEnabled) {
+            android.util.Log.i(
+                "StepCounter",
+                "UI DB write disabled: $reason (timestamp=${java.util.Date(timestamp)}, steps=$steps)"
+            )
+            return
+        }
+        repository.saveHourlySteps(timestamp, steps)
     }
 }

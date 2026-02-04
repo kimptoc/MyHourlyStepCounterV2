@@ -4,9 +4,14 @@ import android.content.Context
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.first
+import org.json.JSONArray
+import org.json.JSONObject
 
 private val Context.dataStore by preferencesDataStore("step_preferences")
 
@@ -31,6 +36,11 @@ class StepPreferences(private val context: Context) {
 
         // Deduplication preference
         val LAST_PROCESSED_BOUNDARY_TIMESTAMP = longPreferencesKey("last_processed_boundary_timestamp")
+        val LAST_PROCESSED_RANGE_START = longPreferencesKey("last_processed_range_start")
+        val LAST_PROCESSED_RANGE_END = longPreferencesKey("last_processed_range_end")
+
+        // Snapshot preferences (rolling 24h window)
+        val DEVICE_TOTAL_SNAPSHOTS = stringPreferencesKey("device_total_snapshots_json")
 
         // Second reminder (XX:55) preferences
         val LAST_SECOND_REMINDER_TIME = longPreferencesKey("last_second_reminder_time")
@@ -40,6 +50,8 @@ class StepPreferences(private val context: Context) {
         const val PERMANENT_NOTIFICATION_DEFAULT = true
         const val USE_WAKE_LOCK_DEFAULT = true
         const val REMINDER_NOTIFICATION_DEFAULT = true
+
+        private const val SNAPSHOT_RETENTION_MS = 24 * 60 * 60 * 1000L
     }
 
     val hourStartStepCount: Flow<Int> = context.dataStore.data
@@ -87,6 +99,12 @@ class StepPreferences(private val context: Context) {
 
     val lastProcessedBoundaryTimestamp: Flow<Long> = context.dataStore.data
         .map { preferences -> preferences[LAST_PROCESSED_BOUNDARY_TIMESTAMP] ?: 0L }
+
+    val lastProcessedRangeStart: Flow<Long> = context.dataStore.data
+        .map { preferences -> preferences[LAST_PROCESSED_RANGE_START] ?: 0L }
+
+    val lastProcessedRangeEnd: Flow<Long> = context.dataStore.data
+        .map { preferences -> preferences[LAST_PROCESSED_RANGE_END] ?: 0L }
 
     suspend fun savePermanentNotificationEnabled(enabled: Boolean) {
         context.dataStore.updateData { preferences ->
@@ -216,5 +234,84 @@ class StepPreferences(private val context: Context) {
                 this[LAST_PROCESSED_BOUNDARY_TIMESTAMP] = timestamp
             }
         }
+    }
+
+    suspend fun clearAll() {
+        context.dataStore.edit { it.clear() }
+    }
+
+    suspend fun setDeviceTotalSnapshotsRaw(raw: String) {
+        context.dataStore.edit { prefs ->
+            prefs[DEVICE_TOTAL_SNAPSHOTS] = raw
+        }
+    }
+
+    suspend fun resetBackfillRanges() {
+        context.dataStore.edit { prefs ->
+            prefs[LAST_PROCESSED_RANGE_START] = 0L
+            prefs[LAST_PROCESSED_RANGE_END] = 0L
+            prefs[LAST_PROCESSED_BOUNDARY_TIMESTAMP] = 0L
+        }
+    }
+
+    suspend fun tryClaimBackfillRange(start: Long, end: Long): Boolean {
+        var allowed = false
+        context.dataStore.edit { prefs ->
+            val savedStart = prefs[LAST_PROCESSED_RANGE_START] ?: 0L
+            val savedEnd = prefs[LAST_PROCESSED_RANGE_END] ?: 0L
+            val overlaps = start <= savedEnd && end >= savedStart
+            if (!overlaps) {
+                prefs[LAST_PROCESSED_RANGE_START] = start
+                prefs[LAST_PROCESSED_RANGE_END] = end
+                prefs[LAST_PROCESSED_BOUNDARY_TIMESTAMP] = end
+                allowed = true
+            }
+        }
+        return allowed
+    }
+
+    suspend fun saveDeviceTotalSnapshot(timestamp: Long, deviceTotal: Int) {
+        context.dataStore.edit { prefs ->
+            val raw = prefs[DEVICE_TOTAL_SNAPSHOTS] ?: "[]"
+            val snapshots = parseSnapshots(raw).toMutableList()
+            snapshots.add(DeviceTotalSnapshot(timestamp = timestamp, deviceTotal = deviceTotal))
+            val cutoff = timestamp - SNAPSHOT_RETENTION_MS
+            val pruned = snapshots.filter { it.timestamp >= cutoff }.sortedBy { it.timestamp }
+            prefs[DEVICE_TOTAL_SNAPSHOTS] = serializeSnapshots(pruned)
+        }
+    }
+
+    suspend fun getDeviceTotalSnapshots(): List<DeviceTotalSnapshot> {
+        val raw = context.dataStore.data.map { it[DEVICE_TOTAL_SNAPSHOTS] ?: "[]" }.first()
+        return parseSnapshots(raw)
+    }
+
+    private fun parseSnapshots(raw: String): List<DeviceTotalSnapshot> {
+        return try {
+            val array = JSONArray(raw)
+            val list = ArrayList<DeviceTotalSnapshot>(array.length())
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                val timestamp = obj.optLong("timestamp", 0L)
+                val deviceTotal = obj.optInt("deviceTotal", 0)
+                if (timestamp > 0) {
+                    list.add(DeviceTotalSnapshot(timestamp = timestamp, deviceTotal = deviceTotal))
+                }
+            }
+            list
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun serializeSnapshots(snapshots: List<DeviceTotalSnapshot>): String {
+        val array = JSONArray()
+        for (snapshot in snapshots) {
+            val obj = JSONObject()
+            obj.put("timestamp", snapshot.timestamp)
+            obj.put("deviceTotal", snapshot.deviceTotal)
+            array.put(obj)
+        }
+        return array.toString()
     }
 }

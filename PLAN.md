@@ -57,6 +57,75 @@ Today just after 8am:
 3. Verify daily total matches Samsung Health within 1–2 steps (expected sensor variance).
 4. Confirm logs show backfill executed with correct hours.
 
+## 🟡 ARCHITECTURE: Service‑Only DB Writes (Feb 4, 2026)
+
+### Goal
+Centralize all hourly DB writes in `StepCounterForegroundService`. UI should be read‑only and never write hourly records. AlarmManager/WorkManager should **start the service** (when allowed) instead of writing data directly.
+
+### Rationale
+- Avoid duplicate writes from multiple components (UI + service + receiver + worker).
+- Ensure consistent backfill logic in one place.
+- Keep UI simple: read/observe DB state only.
+
+### Proposed Changes (Task)
+1. **Move/Consolidate Backfill Logic into FG Service**
+   - Implement full missed‑hour detection/backfill in `StepCounterForegroundService`.
+   - Ensure dedup by persisting last processed range (start/end) in `StepPreferences`.
+2. **Add Periodic “Snapshot” of Device Total**
+   - Persist `totalStepsDevice` + timestamp every **15 minutes** in `StepPreferences`.
+   - Retain the last **24 hours** of snapshots (rolling window).
+   - Use snapshots to improve backfill accuracy when multiple hours are missed.
+   - Keep snapshot writes lightweight (DataStore only, no DB writes).
+   - Define snapshot structure in plan:
+     - `DeviceTotalSnapshot(timestamp: Long, deviceTotal: Int)`
+   - Storage options:
+     - Preferred: Proto DataStore message with repeated `DeviceTotalSnapshot`
+     - Acceptable: JSON‑serialized list in Preferences DataStore
+3. **Make UI Read‑Only**
+   - Remove hourly DB writes from `StepCounterViewModel` (startup and UI‑resume closure logic).
+   - Keep it limited to reading DB + displaying sensor current hour.
+4. **Receiver/Worker Start Service**
+   - Update `HourBoundaryReceiver` and `HourBoundaryCheckWorker` to start the FG service for processing instead of writing directly.
+   - Respect `permanentNotificationEnabled` and platform restrictions.
+5. **Hard Dedup & Safety**
+   - Add a single “backfill coordinator” gate in service to prevent double‑processing from multiple triggers.
+   - Store last processed backfill range as two DataStore longs:
+     - `lastProcessedRangeStart`
+     - `lastProcessedRangeEnd`
+   - Gate logic should be **atomic** (single `dataStore.edit`):
+     - If new range overlaps saved range → skip.
+     - Otherwise update range + `lastProcessedBoundaryTimestamp` and proceed.
+   - Example (pseudocode):
+     - `suspend fun tryClaimBackfillRange(start: Long, end: Long): Boolean {`
+     - `  var allowed = false`
+     - `  dataStore.edit { prefs ->`
+     - `    val savedStart = prefs[LAST_RANGE_START] ?: 0L`
+     - `    val savedEnd = prefs[LAST_RANGE_END] ?: 0L`
+     - `    val overlaps = start <= savedEnd && end >= savedStart`
+     - `    if (!overlaps) {`
+     - `      prefs[LAST_RANGE_START] = start`
+     - `      prefs[LAST_RANGE_END] = end`
+     - `      prefs[LAST_PROCESSED_BOUNDARY] = end`
+     - `      allowed = true`
+     - `    }`
+     - `  }`
+     - `  return allowed`
+     - `}`
+   - Log explicit “skip” reasons and processed hour ranges.
+
+### Files to Inspect/Modify
+- `app/src/main/java/com/example/myhourlystepcounterv2/services/StepCounterForegroundService.kt`
+- `app/src/main/java/com/example/myhourlystepcounterv2/notifications/HourBoundaryReceiver.kt`
+- `app/src/main/java/com/example/myhourlystepcounterv2/worker/HourBoundaryCheckWorker.kt`
+- `app/src/main/java/com/example/myhourlystepcounterv2/ui/StepCounterViewModel.kt`
+- `app/src/main/java/com/example/myhourlystepcounterv2/data/StepPreferences.kt`
+
+### Verification Plan
+1. Force‑stop app, ensure service writes hourly entries at boundaries.
+2. Disable/enable permanent notification; verify service restart writes missed hours.
+3. Simulate missed midnight boundary; verify DB entries exist without UI participation.
+4. Confirm no duplicate hour rows are created when receiver/worker fires concurrently.
+
 ## 🟢 FIXED: Deduplication Blocking ALL Hour Boundaries (Feb 3, 2026)
 
 ### Status
