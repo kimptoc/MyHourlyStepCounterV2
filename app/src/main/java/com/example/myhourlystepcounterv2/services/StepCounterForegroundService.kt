@@ -33,6 +33,21 @@ class StepCounterForegroundService : android.app.Service() {
         const val CHANNEL_ID = "step_counter_channel_v4"
         const val NOTIFICATION_ID = 42
         const val ACTION_STOP = "com.example.myhourlystepcounterv2.ACTION_STOP_FOREGROUND"
+
+        fun resolvePreviousHourTimestamp(
+            currentHourTimestamp: Long,
+            savedHourTimestamp: Long
+        ): Long {
+            val expectedPrevious = currentHourTimestamp - (60 * 60 * 1000)
+            return if (savedHourTimestamp <= 0 ||
+                savedHourTimestamp < expectedPrevious ||
+                savedHourTimestamp > currentHourTimestamp
+            ) {
+                expectedPrevious
+            } else {
+                savedHourTimestamp
+            }
+        }
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -431,7 +446,7 @@ class StepCounterForegroundService : android.app.Service() {
             }.timeInMillis
 
             // Get the PREVIOUS hour's data that needs to be saved
-            val previousHourTimestamp = preferences.currentHourTimestamp.first()
+            var previousHourTimestamp = preferences.currentHourTimestamp.first()
             val lastProcessed = preferences.lastProcessedBoundaryTimestamp.first()
             val effectiveLastProcessed = maxOf(lastProcessed, lastProcessedBoundaryTimestamp)
             
@@ -442,6 +457,42 @@ class StepCounterForegroundService : android.app.Service() {
                     "handleHourBoundary: Current hour $currentHourTimestamp already processed (effectiveLast=$effectiveLastProcessed), skipping"
                 )
                 return
+            }
+
+            val expectedPreviousHour = currentHourTimestamp - (60 * 60 * 1000)
+            val gapHours = if (previousHourTimestamp > 0) {
+                (currentHourTimestamp - previousHourTimestamp) / (60 * 60 * 1000)
+            } else {
+                0
+            }
+
+            if (gapHours > 1) {
+                android.util.Log.w(
+                    "StepCounterFGSvc",
+                    "handleHourBoundary: Detected stale previousHourTimestamp=${java.util.Date(previousHourTimestamp)} " +
+                            "(gap=$gapHours hours). Running missed-hour backfill before saving."
+                )
+                checkMissedHourBoundaries()
+                previousHourTimestamp = preferences.currentHourTimestamp.first()
+                if (previousHourTimestamp < expectedPreviousHour || previousHourTimestamp > currentHourTimestamp) {
+                    android.util.Log.w(
+                        "StepCounterFGSvc",
+                        "handleHourBoundary: Backfill did not advance hour timestamp (now=${java.util.Date(previousHourTimestamp)}). Will clamp to expected."
+                    )
+                }
+            }
+
+            val resolvedPreviousHour = resolvePreviousHourTimestamp(
+                currentHourTimestamp = currentHourTimestamp,
+                savedHourTimestamp = previousHourTimestamp
+            )
+            if (resolvedPreviousHour != previousHourTimestamp) {
+                android.util.Log.w(
+                    "StepCounterFGSvc",
+                    "handleHourBoundary: Correcting previousHourTimestamp from ${java.util.Date(previousHourTimestamp)} " +
+                            "to expected ${java.util.Date(expectedPreviousHour)}"
+                )
+                previousHourTimestamp = resolvedPreviousHour
             }
 
             val previousHourStartStepCount = preferences.hourStartStepCount.first()
