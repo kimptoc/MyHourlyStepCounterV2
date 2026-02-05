@@ -29,6 +29,19 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
     private lateinit var preferences: StepPreferences
     private val uiDbWritesEnabled = false
 
+    companion object {
+        fun shouldSyncTimestamp(
+            sensorInitialized: Boolean,
+            sensorBaseline: Int,
+            sensorCurrentSteps: Int,
+            maxStepsPerHour: Int
+        ): Boolean {
+            return sensorInitialized &&
+                sensorBaseline > 0 &&
+                sensorCurrentSteps in 0..maxStepsPerHour
+        }
+    }
+
     // Guard to prevent duplicate initialization
     @Volatile
     private var isInitialized = false
@@ -718,24 +731,38 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                 }
             }
 
-            // Update current hour baseline after distribution
-            // Only update if we're in a new hour compared to the saved timestamp
+            // UI is read-only for baselines: do NOT reset baseline here.
+            // Just sync the timestamp if the sensor state looks valid.
             if (currentHourTimestamp != savedHourTimestamp) {
-                // Hour changed - set new baseline
-                android.util.Log.i("StepCounter", "Post-UI-closure-distribution: Setting new hour baseline to $currentDeviceTotal (hour changed from ${java.util.Date(savedHourTimestamp)} to ${java.util.Date(currentHourTimestamp)})")
-                preferences.saveHourData(
-                    hourStartStepCount = currentDeviceTotal,
-                    currentTimestamp = currentHourTimestamp,
-                    totalSteps = currentDeviceTotal
-                )
-                sensorManager.setLastHourStartStepCount(currentDeviceTotal)
-                sensorManager.markInitialized()
-            } else {
-                // Same hour - keep existing baseline to preserve current hour progress
-                android.util.Log.i("StepCounter", "Post-UI-closure-distribution: Same hour as before - NOT resetting baseline (timestamp: ${java.util.Date(currentHourTimestamp)})")
+                val state = sensorManager.sensorState.value
+                val sensorBaseline = state.lastHourStartStepCount
+                val sensorCurrentSteps = state.currentHourSteps
+                val sensorInitialized = state.isInitialized
+
+                if (shouldSyncTimestamp(
+                        sensorInitialized = sensorInitialized,
+                        sensorBaseline = sensorBaseline,
+                        sensorCurrentSteps = sensorCurrentSteps,
+                        maxStepsPerHour = StepTrackerConfig.MAX_STEPS_PER_HOUR
+                    )
+                ) {
+                    android.util.Log.i(
+                        "StepCounter",
+                        "Post-UI-closure: FG service has valid tracking (baseline=$sensorBaseline, " +
+                                "currentHourSteps=$sensorCurrentSteps). UI preserving state."
+                    )
+                    preferences.saveCurrentHourTimestamp(currentHourTimestamp)
+                } else {
+                    android.util.Log.w(
+                        "StepCounter",
+                        "Post-UI-closure: Sensor not initialized or stale (initialized=$sensorInitialized, " +
+                                "baseline=$sensorBaseline). UI will NOT reset baseline. " +
+                                "Relying on FG service/worker to reconcile."
+                    )
+                }
             }
 
-            // Record distribution time
+            // Record distribution time (UI-visible event only)
             preferences.saveLastDistributionTime(System.currentTimeMillis())
         }
 

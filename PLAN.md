@@ -148,14 +148,114 @@ Expected to save the hour ending at 00:00 (i.e., 23:00–00:00).
    - If saved timestamp is stale, use `currentHourTimestamp - 1h` for the “previous hour” save.
 4. **Add logs**:
    - Log when saved hour timestamp is stale and when it is corrected.
+5. **Status**
+   - Implemented: stale timestamp detection + clamp + explicit logs in `handleHourBoundary()`.
 
 ### Files to Modify
 - `app/src/main/java/com/example/myhourlystepcounterv2/services/StepCounterForegroundService.kt`
 
 ### Verification Plan
-1. Reproduce at next hour boundary and confirm saved hour matches `currentHourTimestamp - 1h`.
-2. Confirm History list includes 23:00 after midnight.
-3. Ensure no duplicate writes from receiver/worker triggers.
+1. Reproduce at next hour boundary and confirm log line `Saving completed hour: timestamp=...` matches `currentHourTimestamp - 1h`.
+2. Verify DB entry exists for that hour (History list shows the hour row).
+3. Confirm History list includes 23:00 after midnight.
+4. Ensure no duplicate writes from receiver/worker triggers.
+
+## 🟡 BUG: UI Resume Overwrites Correct FG Service Baseline (Feb 5, 2026)
+
+### Symptom
+At ~7:30am, notification showed ~100 steps for current hour and ~216 for daily total. Opening the app reset both UI and notification to 0 steps for current hour.
+
+### Evidence from Device Logs (07:39)
+```
+Sensor fired: absolute=40871 | hourBaseline=40865 | delta=6 | initialized=true
+History loaded: 06:00: 0, 05:00: 0, 04:00: 0, 03:00: 0, 02:00: 0, 01:00: 84, 00:00: 25
+```
+The `hourBaseline=40865` is only 6 steps behind `absolute=40871`. If ~100 steps were accumulated, baseline should have been ~40771. Something reset the baseline to a recent value when the app opened.
+
+### Root Cause
+In `StepCounterViewModel.kt` lines 721-736, `handleUiResumeClosure()` unconditionally resets the sensor baseline when it detects an hour change:
+
+```kotlin
+if (currentHourTimestamp != savedHourTimestamp) {
+    // Hour changed - set new baseline
+    preferences.saveHourData(
+        hourStartStepCount = currentDeviceTotal,  // BUG: Overwrites correct baseline!
+        ...
+    )
+    sensorManager.setLastHourStartStepCount(currentDeviceTotal)  // BUG: Resets sensor too!
+}
+```
+
+**What happens:**
+1. FG service correctly processed 7:00 boundary, set baseline to (e.g.) 40765
+2. FG service tracks steps: 40765 → 40865 = ~100 steps for 7am hour
+3. Preferences `currentHourTimestamp` may lag behind (still 06:00)
+4. User opens app at 7:30, UI detects "hour changed" (07:00 ≠ 06:00)
+5. UI overwrites baseline to 40865 (current total), wiping out ~100 steps
+6. Both UI and notification now show 0 steps
+
+### Status
+✅ Implemented (UI no longer resets baselines on resume; service remains source of truth).
+
+### Proposed Fix (Task)
+**Key principle:** UI must remain read-only per the "Service-Only DB Writes" architecture. UI should NEVER reset baselines or call `saveHourData()`. The FG service is the sole owner of baselines and DB writes.
+
+**Fix:** Remove the baseline reset logic from `handleUiResumeClosure()` entirely. If sensor state is valid (FG service running), trust it. If not, do nothing and let the FG service/worker reconcile later.
+
+```kotlin
+// REPLACE lines 721-736 in handleUiResumeClosure() with:
+if (currentHourTimestamp != savedHourTimestamp) {
+    val state = sensorManager.sensorState.value
+    val sensorBaseline = state.lastHourStartStepCount
+    val sensorCurrentSteps = state.currentHourSteps
+    val sensorInitialized = state.isInitialized
+
+    // Only trust sensor state if:
+    // 1. Sensor is initialized (FG service has set it up)
+    // 2. Baseline is positive (valid tracking in progress)
+    // 3. Current hour steps are reasonable
+    if (sensorInitialized && sensorBaseline > 0 &&
+        sensorCurrentSteps in 0..StepTrackerConfig.MAX_STEPS_PER_HOUR) {
+        // FG service has valid tracking - UI preserves state, does NOT reset
+        android.util.Log.i("StepCounter",
+            "Post-UI-closure: FG service has valid tracking (baseline=$sensorBaseline, " +
+            "currentHourSteps=$sensorCurrentSteps). UI preserving state.")
+        // Only sync timestamp preference (no baseline change)
+        preferences.saveCurrentHourTimestamp(currentHourTimestamp)
+    } else {
+        // Sensor not initialized or stale - UI does NOT reset
+        // Let FG service or HourBoundaryCheckWorker reconcile later
+        android.util.Log.w("StepCounter",
+            "Post-UI-closure: Sensor not initialized or stale (initialized=$sensorInitialized, " +
+            "baseline=$sensorBaseline). UI will NOT reset baseline. " +
+            "Relying on FG service/worker to reconcile.")
+        // DO NOT call: preferences.saveHourData(...)
+        // DO NOT call: sensorManager.setLastHourStartStepCount(...)
+        // DO NOT call: sensorManager.markInitialized()
+    }
+}
+```
+
+### Rationale (UI Read-Only Architecture)
+Per the "🟡 ARCHITECTURE: Service-Only DB Writes" decision:
+- UI should be read-only and never write hourly records or reset baselines
+- FG service is the sole owner of baselines and DB writes
+- If FG service missed something, HourBoundaryCheckWorker will catch up
+
+### Files to Modify
+- `app/src/main/java/com/example/myhourlystepcounterv2/ui/StepCounterViewModel.kt` (lines 721-736)
+  - Remove `preferences.saveHourData()` call entirely
+  - Remove `sensorManager.setLastHourStartStepCount()` call entirely
+  - Remove `sensorManager.markInitialized()` call entirely
+  - Keep only timestamp sync (when valid) and logging
+
+### Verification Plan
+1. Walk around with app closed, notification visible showing accumulating steps
+2. Cross an hour boundary (e.g., 7:00 → 7:30)
+3. Note notification step count before opening app
+4. Open app and verify step count preserved
+5. Check logs for: `Post-UI-closure: Preserving FG service baseline` (expected after fix)
+6. Verify no regression: fresh app start after reboot still initializes correctly
 
 ## 🟢 FIXED: Deduplication Blocking ALL Hour Boundaries (Feb 3, 2026)
 
