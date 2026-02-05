@@ -126,6 +126,37 @@ Centralize all hourly DB writes in `StepCounterForegroundService`. UI should be 
 3. Simulate missed midnight boundary; verify DB entries exist without UI participation.
 4. Confirm no duplicate hour rows are created when receiver/worker fires concurrently.
 
+## 🟡 BUG: Hour Boundary Saves Wrong Hour (Feb 5, 2026)
+
+### Symptom
+At 00:00 on Feb 5, log shows FG service saved **22:00** hour instead of **23:00**:
+```
+Saving completed hour: timestamp=1770242400000 (Wed Feb 04 22:00:00 GMT 2026)
+```
+Expected to save the hour ending at 00:00 (i.e., 23:00–00:00).
+
+### Likely Cause
+`preferences.currentHourTimestamp` is stale (lags by >1 hour). The service uses it as the “previous hour” without validating gap size.
+
+### Proposed Fix (Task)
+1. **Sanity check at hour boundary** in `StepCounterForegroundService.handleHourBoundary()`:
+   - Compute `currentHourTimestamp`.
+   - If `currentHourTimestamp - savedHourTimestamp > 1h`, treat as missed hours.
+2. **Run backfill before saving the “previous hour”**:
+   - Use existing `checkMissedHourBoundaries()` / backfill logic (or inline small handler) to catch up.
+3. **Clamp previous hour timestamp**:
+   - If saved timestamp is stale, use `currentHourTimestamp - 1h` for the “previous hour” save.
+4. **Add logs**:
+   - Log when saved hour timestamp is stale and when it is corrected.
+
+### Files to Modify
+- `app/src/main/java/com/example/myhourlystepcounterv2/services/StepCounterForegroundService.kt`
+
+### Verification Plan
+1. Reproduce at next hour boundary and confirm saved hour matches `currentHourTimestamp - 1h`.
+2. Confirm History list includes 23:00 after midnight.
+3. Ensure no duplicate writes from receiver/worker triggers.
+
 ## 🟢 FIXED: Deduplication Blocking ALL Hour Boundaries (Feb 3, 2026)
 
 ### Status
