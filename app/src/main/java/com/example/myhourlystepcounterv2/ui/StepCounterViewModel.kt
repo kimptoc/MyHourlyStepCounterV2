@@ -135,273 +135,53 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
 
             android.util.Log.d("StepCounter", "App startup: Using device steps = $actualDeviceSteps")
 
-            if (actualDeviceSteps >= 0) {  // Changed from > 0 to >= 0 to handle initial reading
-                // We have a real sensor reading
+            if (actualDeviceSteps >= 0) {
                 val savedHourTimestamp = preferences.currentHourTimestamp.first()
                 val currentHourTimestamp = Calendar.getInstance().apply {
                     set(Calendar.MINUTE, 0)
                     set(Calendar.SECOND, 0)
                     set(Calendar.MILLISECOND, 0)
                 }.timeInMillis
-
-                val previousHourStartSteps = preferences.hourStartStepCount.first()
-                val savedDeviceTotal = preferences.totalStepsDevice.first()
-
-                // Check for day boundary crossing and handle closure periods
                 val currentStartOfDay = getStartOfDay()
-                val lastOpenDate = preferences.lastOpenDate.first()
-                val crossedDayBoundary = lastOpenDate > 0 && lastOpenDate < currentStartOfDay
-                val isFirstOpenOfDay = lastOpenDate != currentStartOfDay
+                val sensorState = sensorManager.sensorState.value
 
-                if (crossedDayBoundary) {
-                    // Day boundary crossed - handle yesterday's incomplete hour
-                    android.util.Log.w(
-                        "StepCounter",
-                        "DAY BOUNDARY CROSSED at startup: lastOpenDate=${java.util.Date(lastOpenDate)}, " +
-                                "today=${java.util.Date(currentStartOfDay)}"
-                    )
-
-                    // Save yesterday's incomplete hour as 0 (assume sleep period)
-                    if (savedHourTimestamp > 0) {
-                        saveHourlyStepsIfEnabled(savedHourTimestamp, 0, "Day boundary: yesterday's incomplete hour")
-                    }
-                }
-
-                if (isFirstOpenOfDay) {
-                    // First open of this day - handle closure period with smart distribution
-                    // CRITICAL: Validate savedDeviceTotal before using it
-                    val validSavedDeviceTotal = if (savedDeviceTotal == 0 && previousHourStartSteps > 0) {
-                        // savedDeviceTotal is 0 but we have a baseline - this is the bug condition
-                        // Use the baseline as a safer fallback
-                        android.util.Log.w(
-                            "StepCounter",
-                            "DETECTED BUG: savedDeviceTotal=0 but hourStartStepCount=$previousHourStartSteps. " +
-                                    "Using hourStartStepCount as fallback to prevent data loss."
-                        )
-                        previousHourStartSteps
-                    } else {
-                        savedDeviceTotal
-                    }
-
-                    val stepsWhileClosed = actualDeviceSteps - validSavedDeviceTotal
-                    val currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-                    val isEarlyMorning = currentHour < StepTrackerConfig.MORNING_THRESHOLD_HOUR
-
-                    if (stepsWhileClosed > 10 && savedHourTimestamp > 0 && savedHourTimestamp < currentStartOfDay) {
-                        // App was closed across a day boundary with significant steps
-                        android.util.Log.i(
-                            "StepCounter",
-                            "FIRST OPEN OF DAY: stepsWhileClosed=$stepsWhileClosed, hour=$currentHour, " +
-                                    "earlyMorning=$isEarlyMorning, threshold=${StepTrackerConfig.MORNING_THRESHOLD_HOUR}"
-                        )
-
-                        if (isEarlyMorning) {
-                            // Early morning (before 10am): put all steps in current hour
-                            val stepsClamped = minOf(stepsWhileClosed, StepTrackerConfig.MAX_STEPS_PER_HOUR)
-                            android.util.Log.i("StepCounter", "Early morning: SAVING $stepsClamped steps to current hour ${java.util.Date(currentHourTimestamp)}")
-
-                            // CRITICAL FIX: Save to database immediately
-                            saveHourlyStepsIfEnabled(currentHourTimestamp, stepsClamped, "Early morning closure distribution")
-                        } else {
-                            // Later in day: distribute steps evenly across waking hours (threshold onwards)
-                            val hoursAwake = currentHour - StepTrackerConfig.MORNING_THRESHOLD_HOUR
-                            if (hoursAwake > 0) {
-                                val stepsPerHour = stepsWhileClosed / hoursAwake
-                                android.util.Log.i(
-                                    "StepCounter",
-                                    "Later in day: distributing $stepsWhileClosed steps across $hoursAwake hours (~$stepsPerHour/hour)"
-                                )
-
-                                // Save distributed steps for hours from threshold to now
-                                val thresholdCalendar = Calendar.getInstance().apply {
-                                    set(Calendar.HOUR_OF_DAY, StepTrackerConfig.MORNING_THRESHOLD_HOUR)
-                                    set(Calendar.MINUTE, 0)
-                                    set(Calendar.SECOND, 0)
-                                    set(Calendar.MILLISECOND, 0)
-                                }
-
-                                // Track which hours we're saving to prevent WorkManager conflicts
-                                val distributedHours = mutableListOf<Long>()
-
-                                for (hour in 0 until hoursAwake) {
-                                    // Create fresh calendar for each hour to avoid accumulation
-                                    val hourCalendar = Calendar.getInstance().apply {
-                                        set(Calendar.HOUR_OF_DAY, StepTrackerConfig.MORNING_THRESHOLD_HOUR + hour)
-                                        set(Calendar.MINUTE, 0)
-                                        set(Calendar.SECOND, 0)
-                                        set(Calendar.MILLISECOND, 0)
-                                    }
-                                    val hourTimestamp = hourCalendar.timeInMillis
-
-                                    val stepsClamped = minOf(stepsPerHour, StepTrackerConfig.MAX_STEPS_PER_HOUR)
-                                    android.util.Log.i("StepCounter", "CLOSURE DISTRIBUTION: Saving hour ${StepTrackerConfig.MORNING_THRESHOLD_HOUR + hour}:00 (${java.util.Date(hourTimestamp)}) ← $stepsClamped steps [STARTING]")
-
-                                    // CRITICAL FIX: Save synchronously within this coroutine scope (already inside launch from line 80)
-                                    saveHourlyStepsIfEnabled(
-                                        hourTimestamp,
-                                        stepsClamped,
-                                        "Closure distribution hour ${StepTrackerConfig.MORNING_THRESHOLD_HOUR + hour}:00"
-                                    )
-                                    distributedHours.add(hourTimestamp)
-                                }
-
-                                // CRITICAL FIX: Verify all saves committed
-                                android.util.Log.i("StepCounter", "CLOSURE DISTRIBUTION COMPLETE: Verifying ${distributedHours.size} hours...")
-                                for ((index, hourTs) in distributedHours.withIndex()) {
-                                    if (uiDbWritesEnabled) {
-                                        val saved = repository.getStepForHour(hourTs)
-                                        val hourNum = StepTrackerConfig.MORNING_THRESHOLD_HOUR + index
-                                        android.util.Log.i("StepCounter", "  ✓ Hour $hourNum:00 → DB has ${saved?.stepCount ?: 0} steps")
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // CRITICAL FIX: Update current hour baseline after distribution
-                    // This ensures subsequent sensor readings calculate correctly
-                    // Only update if we're in a new hour compared to the saved timestamp
-                    val savedHourTimestamp = preferences.currentHourTimestamp.first()
-                    if (currentHourTimestamp != savedHourTimestamp) {
-                        val sensorState = sensorManager.sensorState.value
-                        val shouldPreserveFgTracking = shouldSyncTimestamp(
-                            sensorInitialized = sensorState.isInitialized,
-                            sensorBaseline = sensorState.lastHourStartStepCount,
-                            sensorCurrentSteps = sensorState.currentHourSteps,
-                            maxStepsPerHour = StepTrackerConfig.MAX_STEPS_PER_HOUR
-                        )
-
-                        if (shouldPreserveFgTracking) {
-                            val currentDeviceTotal = sensorManager.getCurrentTotalSteps()
-                            android.util.Log.i(
-                                "StepCounter",
-                                "Post-distribution: FG service already tracking (baseline=${sensorState.lastHourStartStepCount}, " +
-                                        "currentHourSteps=${sensorState.currentHourSteps}). " +
-                                        "Syncing prefs to current hour without resetting baseline."
-                            )
-                            preferences.saveHourData(
-                                hourStartStepCount = sensorState.lastHourStartStepCount,
-                                currentTimestamp = currentHourTimestamp,
-                                totalSteps = currentDeviceTotal
-                            )
-                        } else {
-                            // Hour changed - set new baseline
-                            android.util.Log.i("StepCounter", "Post-distribution: Setting new hour baseline to $actualDeviceSteps (hour changed from ${java.util.Date(savedHourTimestamp)} to ${java.util.Date(currentHourTimestamp)})")
-                            preferences.saveHourData(
-                                hourStartStepCount = actualDeviceSteps,
-                                currentTimestamp = currentHourTimestamp,
-                                totalSteps = actualDeviceSteps
-                            )
-                            sensorManager.setLastHourStartStepCount(actualDeviceSteps)
-                            sensorManager.setLastKnownStepCount(actualDeviceSteps)
-                            sensorManager.markInitialized()
-                        }
-                    } else {
-                        // Same hour - keep existing baseline to preserve current hour progress
-                        android.util.Log.i("StepCounter", "Post-distribution: Same hour as before - NOT resetting baseline (timestamp: ${java.util.Date(currentHourTimestamp)})")
-                    }
-
-                    // Record distribution time for WorkManager coordination
-                    preferences.saveLastDistributionTime(System.currentTimeMillis())
-                    android.util.Log.i("StepCounter", "Closure distribution timestamp recorded")
-
-                    // Update last open date
-                    preferences.saveLastOpenDate(currentStartOfDay)
-                }
-
-                // Check if we're in a new hour since last session
-                if (currentHourTimestamp != savedHourTimestamp && savedHourTimestamp > 0) {
-                    val sensorState = sensorManager.sensorState.value
-                    val shouldPreserveFgTracking = shouldSyncTimestamp(
+                when {
+                    sensorState.isInitialized && shouldSyncTimestamp(
                         sensorInitialized = sensorState.isInitialized,
                         sensorBaseline = sensorState.lastHourStartStepCount,
                         sensorCurrentSteps = sensorState.currentHourSteps,
                         maxStepsPerHour = StepTrackerConfig.MAX_STEPS_PER_HOUR
-                    )
+                    ) -> {
+                        if (currentHourTimestamp != savedHourTimestamp) {
+                            preferences.saveCurrentHourTimestamp(currentHourTimestamp)
+                            android.util.Log.i(
+                                "StepCounter",
+                                "FG service tracking - synced timestamp only (hour=$currentHourTimestamp)"
+                            )
+                        }
+                    }
 
-                    if (shouldPreserveFgTracking) {
-                        val currentDeviceTotal = sensorManager.getCurrentTotalSteps()
+                    !sensorState.isInitialized && savedHourTimestamp == currentHourTimestamp -> {
+                        val baselineCandidate = preferences.hourStartStepCount.first()
+                        val baseline = if (baselineCandidate > 0) baselineCandidate else actualDeviceSteps
+                        val knownTotal = preferences.totalStepsDevice.first().let { maxOf(it, baseline, actualDeviceSteps) }
+
+                        sensorManager.setLastHourStartStepCount(baseline)
+                        sensorManager.setLastKnownStepCount(knownTotal)
+                        sensorManager.markInitialized()
+                        preferences.saveCurrentHourTimestamp(currentHourTimestamp)
                         android.util.Log.i(
                             "StepCounter",
-                            "App startup: FG service already tracking (baseline=${sensorState.lastHourStartStepCount}, " +
-                                    "currentHourSteps=${sensorState.currentHourSteps}). " +
-                                    "Skipping missed-hour backfill/baseline reset; syncing prefs to current hour."
+                            "FG service had fresh prefs - seeded sensor from saved baseline=$baseline, total=$knownTotal"
                         )
-                        preferences.saveHourData(
-                            hourStartStepCount = sensorState.lastHourStartStepCount,
-                            currentTimestamp = currentHourTimestamp,
-                            totalSteps = currentDeviceTotal
+                    }
+
+                    else -> {
+                        android.util.Log.w(
+                            "StepCounter",
+                            "Cold start or stale prefs detected (saved=$savedHourTimestamp, current=$currentHourTimestamp). " +
+                                    "Seeding from current device steps=$actualDeviceSteps"
                         )
-                    } else {
-                        // Check for multiple missed hour boundaries
-                        val hoursDifference = (currentHourTimestamp - savedHourTimestamp) / (60 * 60 * 1000)
-
-                        if (hoursDifference > 1) {
-                            // Multiple hour boundaries were missed - handle retroactively
-                            android.util.Log.w(
-                                "StepCounter",
-                                "MISSED HOUR BOUNDARIES DETECTED: $hoursDifference hours missed. " +
-                                        "Last saved: ${java.util.Date(savedHourTimestamp)}, " +
-                                        "Current: ${java.util.Date(currentHourTimestamp)}"
-                            )
-
-                            // Calculate total steps taken while app was closed
-                            // CRITICAL: Validate savedDeviceTotal before using it
-                            val validSavedDeviceTotal = if (savedDeviceTotal == 0 && previousHourStartSteps > 0) {
-                                android.util.Log.w(
-                                    "StepCounter",
-                                    "DETECTED BUG in missed boundaries logic: savedDeviceTotal=0 but hourStartStepCount=$previousHourStartSteps. " +
-                                            "Using hourStartStepCount as fallback."
-                                )
-                                previousHourStartSteps
-                            } else {
-                                savedDeviceTotal
-                            }
-
-                            val totalStepsWhileClosed = actualDeviceSteps - validSavedDeviceTotal
-
-                            if (totalStepsWhileClosed > 0) {
-                                // Distribute steps across missed hours
-                                val stepsPerHour = totalStepsWhileClosed / hoursDifference.toInt()
-
-                                // Save steps for each missed hour
-                                var currentHourStart = savedHourTimestamp
-                                for (i in 0 until hoursDifference.toInt()) {
-                                    if (i < hoursDifference.toInt() - 1) {  // Don't process the current hour
-                                        val stepsForHour = minOf(stepsPerHour, StepTrackerConfig.MAX_STEPS_PER_HOUR)
-
-                                        // Skip hours that are in the future (shouldn't happen but just in case)
-                                        if (currentHourStart < currentHourTimestamp) {
-                                            saveHourlyStepsIfEnabled(
-                                                currentHourStart,
-                                                stepsForHour,
-                                                "Retroactive missed-hour save"
-                                            )
-                                        }
-
-                                        // Move to next hour
-                                        currentHourStart += (60 * 60 * 1000)
-                                    }
-                                }
-                            }
-                        } else {
-                            // Single hour boundary was missed - handle normally
-                            if (previousHourStartSteps > 0 && savedDeviceTotal > 0) {
-                                var stepsInPreviousHour = actualDeviceSteps - previousHourStartSteps
-
-                                // Validate
-                                if (stepsInPreviousHour < 0) {
-                                    stepsInPreviousHour = 0
-                                } else if (stepsInPreviousHour > 10000) {
-                                    stepsInPreviousHour = 10000
-                                }
-
-                                saveHourlyStepsIfEnabled(savedHourTimestamp, stepsInPreviousHour, "App startup previous hour save")
-                            }
-                        }
-
-                        // Initialize for current hour with actual device step count
-                        android.util.Log.d("StepCounter", "App startup: Initializing with actual device steps = $actualDeviceSteps, hour = ${Calendar.getInstance().get(Calendar.HOUR_OF_DAY)}")
                         preferences.saveHourData(
                             hourStartStepCount = actualDeviceSteps,
                             currentTimestamp = currentHourTimestamp,
@@ -410,60 +190,10 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                         sensorManager.setLastHourStartStepCount(actualDeviceSteps)
                         sensorManager.setLastKnownStepCount(actualDeviceSteps)
                         sensorManager.markInitialized()
-                        android.util.Log.d("StepCounter", "App startup: Set sensor manager - hour start = $actualDeviceSteps, known total = $actualDeviceSteps")
-                    }
-                } else {
-                    // Same hour as last session
-                    // CRITICAL: Validate savedDeviceTotal before using it
-                    val validSavedDeviceTotal = if (savedDeviceTotal == 0 && previousHourStartSteps > 0) {
-                        android.util.Log.w(
-                            "StepCounter",
-                            "DETECTED BUG in same-hour logic: savedDeviceTotal=0 but hourStartStepCount=$previousHourStartSteps. " +
-                                    "Using hourStartStepCount as fallback."
-                        )
-                        previousHourStartSteps
-                    } else {
-                        savedDeviceTotal
-                    }
-
-                    val stepsWhileAppWasClosed = actualDeviceSteps - validSavedDeviceTotal
-
-                    if (stepsWhileAppWasClosed > 10 && previousHourStartSteps > 0) {
-                        // App was closed in the same hour and steps were taken
-                        // Restore previous baseline to preserve what steps we CAN track
-                        val hourTimestamp = java.util.Date(savedHourTimestamp)
-                        val now = java.util.Date()
-                        android.util.Log.w(
-                            "StepCounter",
-                            "APP CLOSED MID-HOUR: " +
-                                    "hourStartTime=$hourTimestamp | " +
-                                    "now=$now | " +
-                                    "stepsWhileClosed=$stepsWhileAppWasClosed | " +
-                                    "baseline=$previousHourStartSteps | " +
-                                    "current=$actualDeviceSteps | " +
-                                    "willShow=${actualDeviceSteps - previousHourStartSteps}"
-                        )
-                        sensorManager.setLastHourStartStepCount(previousHourStartSteps)
-                        sensorManager.setLastKnownStepCount(actualDeviceSteps)
-                        sensorManager.markInitialized()
-                    } else {
-                        // Normal case: app was just backgrounded/resumed in same hour
-                        val hourTimestamp = java.util.Date(savedHourTimestamp)
-                        val now = java.util.Date()
-                        android.util.Log.d(
-                            "StepCounter",
-                            "App startup: same-hour resume | " +
-                                    "hourStartTime=$hourTimestamp | " +
-                                    "now=$now | " +
-                                    "baseline=$previousHourStartSteps | " +
-                                    "current=$actualDeviceSteps | " +
-                                    "willShow=${actualDeviceSteps - previousHourStartSteps}"
-                        )
-                        sensorManager.setLastHourStartStepCount(previousHourStartSteps)
-                        sensorManager.setLastKnownStepCount(actualDeviceSteps)
-                        sensorManager.markInitialized()
                     }
                 }
+
+                preferences.saveLastOpenDate(currentStartOfDay)
             }
         }
 
@@ -488,40 +218,6 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                     )
                 }
             }
-        }
-
-        // Setup day boundary detection and daily step observation
-        viewModelScope.launch {
-            // Check for day boundary at startup
-            val currentStartOfDay = getStartOfDay()
-            val lastStoredStartOfDay = preferences.lastStartOfDay.first()
-
-            if (lastStoredStartOfDay > 0 && lastStoredStartOfDay != currentStartOfDay) {
-                android.util.Log.w(
-                    "StepCounter",
-                    "DAY BOUNDARY DETECTED: Previous=${java.util.Date(lastStoredStartOfDay)} | Today=${java.util.Date(currentStartOfDay)}"
-                )
-
-                // Reset for new day - set the hour baseline to current device steps
-                val currentDeviceSteps = sensorManager.getCurrentTotalSteps()
-                val currentHourTimestamp = Calendar.getInstance().apply {
-                    set(Calendar.MINUTE, 0)
-                    set(Calendar.SECOND, 0)
-                    set(Calendar.MILLISECOND, 0)
-                }.timeInMillis
-
-                android.util.Log.d("StepCounter", "Day reset: Setting new hour baseline to $currentDeviceSteps")
-                preferences.saveHourData(
-                    hourStartStepCount = currentDeviceSteps,
-                    currentTimestamp = currentHourTimestamp,
-                    totalSteps = currentDeviceSteps
-                )
-                sensorManager.setLastHourStartStepCount(currentDeviceSteps)
-                sensorManager.setLastKnownStepCount(currentDeviceSteps)
-            }
-
-            // Save the current start of day
-            preferences.saveStartOfDay(currentStartOfDay)
         }
 
         // Observe daily steps (database + current hour)

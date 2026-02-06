@@ -62,6 +62,7 @@ class StepCounterForegroundService : android.app.Service() {
     private var consecutiveFailures: Int = 0
     @Volatile private var hourBoundaryLoopActive: Boolean = false
     @Volatile private var lastProcessedBoundaryTimestamp: Long = 0
+    @Volatile private var lastStalenessLogTime: Long = 0
 
     @OptIn(FlowPreview::class)
     override fun onCreate() {
@@ -124,6 +125,7 @@ class StepCounterForegroundService : android.app.Service() {
             }
             .sample(3.seconds)  // THROTTLE: Only emit once every 3 seconds to prevent notification rate limiting
             .collect { (currentHourSteps, dailyTotal, useWake) ->
+                logTimestampStaleness()
                 android.util.Log.d("StepCounterFGSvc", "Notification update (throttled 3s): currentHour=$currentHourSteps, daily=$dailyTotal")
 
                 // Update notification with correct daily total
@@ -406,6 +408,10 @@ class StepCounterForegroundService : android.app.Service() {
                             currentTimestamp = currentHourTimestamp,
                             totalSteps = deviceTotalToUse
                         )
+                        android.util.Log.i(
+                            "StepCounterFGSvc",
+                            "Preferences synced at missed boundary: baseline=$deviceTotalToUse, timestamp=$currentHourTimestamp, total=$deviceTotalToUse"
+                        )
                         preferences.saveLastProcessedBoundaryTimestamp(currentHourTimestamp)
                         lastProcessedBoundaryTimestamp = currentHourTimestamp
                         preferences.saveReminderSentThisHour(false)
@@ -426,6 +432,7 @@ class StepCounterForegroundService : android.app.Service() {
             }
 
             // Force immediate notification update after reset
+            syncStartOfDay()
             updateNotificationImmediately()
         } catch (e: Exception) {
             android.util.Log.e("StepCounterFGSvc", "Error checking missed hour boundaries", e)
@@ -540,26 +547,7 @@ class StepCounterForegroundService : android.app.Service() {
                 "Processing hour boundary: deviceTotal=$deviceTotal, newHourTimestamp=$currentHourTimestamp (${java.util.Date(currentHourTimestamp)})"
             )
 
-            // Check for day boundary (robust: handles service restarts, timezone changes)
-            val currentStartOfDay = java.util.Calendar.getInstance().apply {
-                set(java.util.Calendar.HOUR_OF_DAY, 0)
-                set(java.util.Calendar.MINUTE, 0)
-                set(java.util.Calendar.SECOND, 0)
-                set(java.util.Calendar.MILLISECOND, 0)
-            }.timeInMillis
-
-            val storedStartOfDay = preferences.lastStartOfDay.first()
-
-            // Update lastStartOfDay if: (1) never initialized, or (2) day changed
-            if (storedStartOfDay == 0L || storedStartOfDay != currentStartOfDay) {
-                val message = if (storedStartOfDay == 0L) {
-                    "Initializing lastStartOfDay to ${java.util.Date(currentStartOfDay)}"
-                } else {
-                    "DAY BOUNDARY: Detected day change from ${java.util.Date(storedStartOfDay)} to ${java.util.Date(currentStartOfDay)}"
-                }
-                android.util.Log.i("StepCounterFGSvc", message)
-                preferences.saveStartOfDay(currentStartOfDay)
-            }
+            syncStartOfDay()
 
             // Begin hour transition - blocks sensor events from interfering
             sensorManager.beginHourTransition()
@@ -578,6 +566,10 @@ class StepCounterForegroundService : android.app.Service() {
                     hourStartStepCount = deviceTotal,
                     currentTimestamp = currentHourTimestamp,
                     totalSteps = deviceTotal
+                )
+                android.util.Log.i(
+                    "StepCounterFGSvc",
+                    "Preferences synced at hour boundary: baseline=$deviceTotal, timestamp=$currentHourTimestamp, total=$deviceTotal"
                 )
 
                 // Reset reminder/achievement flags for new hour
@@ -635,6 +627,49 @@ class StepCounterForegroundService : android.app.Service() {
             nm.notify(NOTIFICATION_ID, notification)
         } catch (e: Exception) {
             android.util.Log.e("StepCounterFGSvc", "Error forcing notification update", e)
+        }
+    }
+
+    private suspend fun syncStartOfDay() {
+        val currentStartOfDay = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+
+        val storedStartOfDay = preferences.lastStartOfDay.first()
+        if (storedStartOfDay == 0L || storedStartOfDay != currentStartOfDay) {
+            val message = if (storedStartOfDay == 0L) {
+                "Initializing lastStartOfDay to ${java.util.Date(currentStartOfDay)}"
+            } else {
+                "DAY BOUNDARY: Detected day change from ${java.util.Date(storedStartOfDay)} to ${java.util.Date(currentStartOfDay)}"
+            }
+            android.util.Log.i("StepCounterFGSvc", message)
+            preferences.saveStartOfDay(currentStartOfDay)
+        }
+    }
+
+    private suspend fun logTimestampStaleness() {
+        val currentHourTimestamp = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        val savedHourTimestamp = preferences.currentHourTimestamp.first()
+        val driftMs = currentHourTimestamp - savedHourTimestamp
+        val twoHoursMs = 2 * 60 * 60 * 1000L
+        if (savedHourTimestamp > 0 && driftMs > twoHoursMs) {
+            val now = System.currentTimeMillis()
+            if (now - lastStalenessLogTime > twoHoursMs) {
+                lastStalenessLogTime = now
+                android.util.Log.e(
+                    "StepCounterFGSvc",
+                    "Stale currentHourTimestamp detected while service running: " +
+                        "saved=${java.util.Date(savedHourTimestamp)} current=${java.util.Date(currentHourTimestamp)} " +
+                        "driftHours=${driftMs / (60 * 60 * 1000)}"
+                )
+            }
         }
     }
 
