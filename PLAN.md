@@ -2362,3 +2362,94 @@ Despite these trade-offs, the current approach ensures that no steps are lost an
 - The foreground service was running but the hour boundary loop may have been stuck
 - This is a systemic issue that will recur until fixed
 - The additional checkMissedHourBoundaries() calls provide extra safety net for edge cases
+
+---
+
+# Architectural Refactor: Single Owner for Step-Tracking State (Feb 6, 2026)
+
+## Background
+
+On Feb 6, the ViewModel's `initialize()` clobbered the FG service's live sensor baseline when the Activity was recreated, resetting the displayed hourly step count from 84 to 0. An immediate fix added `shouldPreserveFgTracking` guards at the two code paths that reset the baseline.
+
+However, this is the latest in a recurring pattern of bugs caused by the same root issue: **the ViewModel and FG service both write to the shared sensor state and DataStore preferences, with no clear owner**. Previous sessions addressed closure period handling, hour distribution bugs, missed boundary detection, multi-layer error recovery, and ViewModel initialization — each adding complexity to an already complex initialization path (~350 lines).
+
+## Goal
+
+Make the FG service the single authority for step-tracking state. Reduce the ViewModel to a thin reader. Eliminate the class of "stale preference" bugs.
+
+## Steps
+
+### Step 1: FG service updates DataStore at every hour boundary
+
+**Files:** `StepCounterForegroundService.kt`, `StepPreferences.kt`
+
+The FG service processes hour boundaries (saves to DB, resets sensor baseline) but does NOT update `currentHourTimestamp` or `hourStartStepCount` in DataStore — only the ViewModel does. This is why preferences go stale when the UI isn't open.
+
+- [ ] In the FG service's `handleHourBoundary()`, after saving to DB and resetting the sensor baseline, call `preferences.saveHourData(hourStartStepCount, currentHourTimestamp, totalSteps)`
+- [ ] In `checkMissedHourBoundaries()`, do the same after processing each missed boundary
+- [ ] Verify `totalStepsDevice` is also kept current by the FG service
+- [ ] Add logging to confirm preference writes at each boundary
+
+### Step 2: FG service updates `lastStartOfDay` on day boundary
+
+**Files:** `StepCounterForegroundService.kt`
+
+- [ ] When the FG service detects a day boundary (midnight crossing), update `preferences.saveStartOfDay(newStartOfDay)`
+- [ ] Note: a basic version of this may already exist (see Day Boundary Bug section above) — verify it covers all cases including `lastOpenDate`
+
+### Step 3: Simplify ViewModel initialization
+
+**Files:** `StepCounterViewModel.kt`
+
+With the FG service keeping preferences current, `initialize()` can be dramatically simplified:
+
+- [ ] **If sensor is already initialized** (FG service running): read state from the sensor singleton, sync any stale preferences, done. No reconstruction needed.
+- [ ] **If sensor is NOT initialized** (cold start, no FG service): read baseline from preferences (now kept current by FG service), set sensor state, done.
+- [ ] **Remove or reduce**: the `isFirstOpenOfDay` closure distribution block, the multi-hour missed boundary backfill, and the day-boundary re-detection. These exist because the ViewModel doesn't trust the FG service — once the FG service reliably owns preferences, they become dead code or simple fallbacks for the no-FG-service edge case.
+- [ ] Target: reduce `initialize()` from ~350 lines to ~100 lines or less
+
+### Step 4: Add staleness assertion
+
+**Files:** `StepCounterViewModel.kt` or `StepCounterForegroundService.kt`
+
+- [ ] Add diagnostic check: if `currentHourTimestamp` in DataStore is more than 2 hours behind the actual current hour while the FG service is running, log an error
+- [ ] This catches preference drift early rather than waiting for user-visible bugs
+- [ ] Could integrate with the existing diagnostic logging that runs every 30 seconds
+
+### Step 5: Add integration test for Activity recreation
+
+**Files:** new test in `app/src/androidTest/`
+
+- [ ] Write an instrumented test that:
+  1. Starts the FG service
+  2. Simulates sensor events to accumulate steps
+  3. Destroys and recreates the Activity (via `ActivityScenario.recreate()`)
+  4. Asserts the displayed hourly step count matches what the FG service was tracking (not zero)
+- [ ] This is the exact failure mode of the Feb 6 bug and prevents regression
+
+### Step 6: Audit and remove accumulated defensive code
+
+**Files:** `StepCounterViewModel.kt`
+
+After steps 1-3, review for code that is now unreachable or redundant:
+
+- [ ] The `shouldPreserveFgTracking` guards (from the Feb 6 fix) — may be unnecessary if the ViewModel no longer attempts baseline resets
+- [ ] The `validSavedDeviceTotal` fallback checks (for `savedDeviceTotal=0` bug) — may be obsolete if the FG service keeps the value current
+- [ ] The closure period distribution logic — may reduce to a single "FG was running → trust it; FG was not running → use preferences" branch
+- [ ] Goal: fewer code paths = fewer edge cases = fewer bugs
+
+## Order of Work
+
+1. **Steps 1-2** first (FG service becomes the writer) — can ship independently
+2. **Step 3** next (simplify ViewModel) — the big payoff
+3. **Steps 4-6** last (observability, testing, cleanup) — hardening
+
+Each step is independently shippable and testable.
+
+## Success Criteria
+
+- [ ] Preferences are current at all times when FG service is running (no stale timestamps)
+- [ ] Opening the app never resets hourly step count when FG service is tracking
+- [ ] ViewModel `initialize()` is under 100 lines
+- [ ] Integration test passes for Activity recreation scenario
+- [ ] Overnight test: all hourly entries present, totals match Samsung Health within 5%
