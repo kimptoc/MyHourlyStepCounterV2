@@ -62,12 +62,52 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
 
     fun startListening() {
         stepSensor?.let {
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
+            // Use maxReportLatencyUs to force the sensor HAL to deliver batched events
+            // at least every 5 minutes, even during Doze mode. Without this parameter,
+            // Samsung devices silently stop delivering TYPE_STEP_COUNTER events when
+            // the screen is off.
+            val maxReportLatencyUs = 5 * 60 * 1_000_000  // 5 minutes
+            val registered = sensorManager.registerListener(
+                this, it,
+                SensorManager.SENSOR_DELAY_NORMAL,
+                maxReportLatencyUs
+            )
+            android.util.Log.i(
+                "StepSensor",
+                "registerListener: SENSOR_DELAY_NORMAL, maxReportLatency=5min, registered=$registered"
+            )
         }
     }
 
     fun stopListening() {
         sensorManager.unregisterListener(this)
+    }
+
+    /**
+     * Forces immediate delivery of all pending batched sensor events from the hardware FIFO.
+     * Call this before reading getCurrentTotalSteps() when data might be stale
+     * (e.g., hour boundary processing after doze).
+     */
+    fun flushSensor(): Boolean {
+        return stepSensor?.let {
+            val result = sensorManager.flush(this)
+            android.util.Log.d("StepSensor", "flushSensor(): result=$result")
+            result
+        } ?: false
+    }
+
+    fun getLastSensorEventTime(): Long {
+        return _sensorState.value.lastSensorEventTimeMs
+    }
+
+    /**
+     * Re-registers the sensor listener as a keepalive against Samsung's aggressive
+     * power management that can silently stop delivering events.
+     */
+    fun reRegisterListener() {
+        android.util.Log.i("StepSensor", "Re-registering sensor listener (keepalive)")
+        stopListening()
+        startListening()
     }
 
     override fun onSensorChanged(event: SensorEvent?) {
@@ -131,6 +171,9 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
                     "StepSensor",
                     "Sensor fired: absolute=$stepCount | hourBaseline=${newState.lastHourStartStepCount} | delta=$stepsThisHour | initialized=${newState.isInitialized}"
                 )
+
+                // Record when this sensor event was received (for staleness detection)
+                newState = newState.copy(lastSensorEventTimeMs = System.currentTimeMillis())
 
                 // Only update display if initialized (prevents showing full device total on first fire)
                 if (newState.isInitialized) {

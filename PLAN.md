@@ -1,4 +1,22 @@
-# CURRENT STATUS & NEXT STEPS (as of 2026-02-03)
+# CURRENT STATUS & NEXT STEPS (as of 2026-02-07)
+
+## 🟡 Fix: Overnight Sensor Event Delivery Bug (Feb 7, 2026)
+
+### Problem
+App loses step data overnight. Sensor events stop being delivered during Doze mode despite foreground service + wake lock. Steps showed in notification after midnight, then all zeros from 1am-8am.
+
+### Root Cause
+`StepSensorManager.startListening()` used 3-parameter `registerListener` without `maxReportLatencyUs`. Samsung's power management silently stops delivering TYPE_STEP_COUNTER events when screen is off.
+
+### Fix Applied
+1. **SensorState.kt**: Added `lastSensorEventTimeMs` field for staleness detection
+2. **StepSensorManager.kt**: Changed to 4-parameter `registerListener` with `maxReportLatencyUs=5min` (forces batched delivery even in Doze). Added `flushSensor()`, `reRegisterListener()`, `getLastSensorEventTime()` methods.
+3. **StepCounterForegroundService.kt**: Added sensor flush before `getCurrentTotalSteps()` in `handleHourBoundary()` and `checkMissedHourBoundaries()`. Modified 15-min snapshot loop to re-register dormant sensors. Re-register sensor after each hour boundary.
+
+### Status: Deployed — awaiting overnight verification
+
+---
+
 
 ## 🟢 UI: History Tab Goal Indicator + Prominent Notifications (Feb 3, 2026)
 
@@ -2385,17 +2403,17 @@ Make the FG service the single authority for step-tracking state. Reduce the Vie
 
 The FG service processes hour boundaries (saves to DB, resets sensor baseline) but does NOT update `currentHourTimestamp` or `hourStartStepCount` in DataStore — only the ViewModel does. This is why preferences go stale when the UI isn't open.
 
-- [ ] In the FG service's `handleHourBoundary()`, after saving to DB and resetting the sensor baseline, call `preferences.saveHourData(hourStartStepCount, currentHourTimestamp, totalSteps)`
-- [ ] In `checkMissedHourBoundaries()`, do the same after processing each missed boundary
-- [ ] Verify `totalStepsDevice` is also kept current by the FG service
-- [ ] Add logging to confirm preference writes at each boundary
+- [x] In the FG service's `handleHourBoundary()`, after saving to DB and resetting the sensor baseline, call `preferences.saveHourData(hourStartStepCount, currentHourTimestamp, totalSteps)` — done (line 634)
+- [x] In `checkMissedHourBoundaries()`, do the same after processing each missed boundary — done (line 458)
+- [x] Verify `totalStepsDevice` is also kept current by the FG service — included in `saveHourData()`
+- [x] Add logging to confirm preference writes at each boundary — done ("Preferences synced at hour boundary" / "Preferences synced at missed boundary")
 
 ### Step 2: FG service updates `lastStartOfDay` on day boundary
 
 **Files:** `StepCounterForegroundService.kt`
 
-- [ ] When the FG service detects a day boundary (midnight crossing), update `preferences.saveStartOfDay(newStartOfDay)`
-- [ ] Note: a basic version of this may already exist (see Day Boundary Bug section above) — verify it covers all cases including `lastOpenDate`
+- [x] When the FG service detects a day boundary (midnight crossing), update `preferences.saveStartOfDay(newStartOfDay)` — done via `syncStartOfDay()` called from both `handleHourBoundary()` and `checkMissedHourBoundaries()`
+- [x] Note: a basic version of this may already exist (see Day Boundary Bug section above) — verified, `syncStartOfDay()` covers this
 
 ### Step 3: Simplify ViewModel initialization
 
@@ -2403,7 +2421,7 @@ The FG service processes hour boundaries (saves to DB, resets sensor baseline) b
 
 With the FG service keeping preferences current, `initialize()` can be dramatically simplified:
 
-- [ ] **If sensor is already initialized** (FG service running): read state from the sensor singleton, sync any stale preferences, done. No reconstruction needed.
+- [ ] **If sensor is already initialized** (FG service running): read state from the sensor singleton, sync any stale preferences, done. No reconstruction needed. *(NOT YET DONE — ViewModel is still 541 lines)*
 - [ ] **If sensor is NOT initialized** (cold start, no FG service): read baseline from preferences (now kept current by FG service), set sensor state, done.
 - [ ] **Remove or reduce**: the `isFirstOpenOfDay` closure distribution block, the multi-hour missed boundary backfill, and the day-boundary re-detection. These exist because the ViewModel doesn't trust the FG service — once the FG service reliably owns preferences, they become dead code or simple fallbacks for the no-FG-service edge case.
 - [ ] Target: reduce `initialize()` from ~350 lines to ~100 lines or less
@@ -2412,9 +2430,9 @@ With the FG service keeping preferences current, `initialize()` can be dramatica
 
 **Files:** `StepCounterViewModel.kt` or `StepCounterForegroundService.kt`
 
-- [ ] Add diagnostic check: if `currentHourTimestamp` in DataStore is more than 2 hours behind the actual current hour while the FG service is running, log an error
-- [ ] This catches preference drift early rather than waiting for user-visible bugs
-- [ ] Could integrate with the existing diagnostic logging that runs every 30 seconds
+- [x] Add diagnostic check: if `currentHourTimestamp` in DataStore is more than 2 hours behind the actual current hour while the FG service is running, log an error — done via `logTimestampStaleness()` (line 722)
+- [x] This catches preference drift early rather than waiting for user-visible bugs — implemented, logs every 2 hours max
+- [x] Could integrate with the existing diagnostic logging that runs every 30 seconds — integrated into the notification update flow
 
 ### Step 5: Add integration test for Activity recreation
 

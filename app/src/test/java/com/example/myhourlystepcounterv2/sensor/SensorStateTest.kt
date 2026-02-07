@@ -54,6 +54,38 @@ class SensorStateTest {
     }
 }
 
+class SensorStateEventTimeTest {
+
+    @Test
+    fun `lastSensorEventTimeMs defaults to zero`() {
+        val state = SensorState()
+        assertEquals(0L, state.lastSensorEventTimeMs)
+    }
+
+    @Test
+    fun `lastSensorEventTimeMs is preserved through copy`() {
+        val state = SensorState(lastSensorEventTimeMs = 1_700_000_000_000L)
+        val copied = state.copy(currentHourSteps = 42)
+        assertEquals(1_700_000_000_000L, copied.lastSensorEventTimeMs)
+        assertEquals(42, copied.currentHourSteps)
+    }
+
+    @Test
+    fun `lastSensorEventTimeMs can be updated via copy`() {
+        val state = SensorState(lastSensorEventTimeMs = 100L)
+        val updated = state.copy(lastSensorEventTimeMs = 200L)
+        assertEquals(100L, state.lastSensorEventTimeMs)
+        assertEquals(200L, updated.lastSensorEventTimeMs)
+    }
+
+    @Test
+    fun `states with different lastSensorEventTimeMs are not equal`() {
+        val a = SensorState(lastSensorEventTimeMs = 100L)
+        val b = SensorState(lastSensorEventTimeMs = 200L)
+        assertNotEquals(a, b)
+    }
+}
+
 class StepSensorManagerConcurrencyTest {
     @Test
     fun `concurrent access to sensor state should be thread-safe`() = runTest {

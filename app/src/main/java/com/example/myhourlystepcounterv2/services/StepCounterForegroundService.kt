@@ -34,6 +34,23 @@ class StepCounterForegroundService : android.app.Service() {
         const val NOTIFICATION_ID = 42
         const val ACTION_STOP = "com.example.myhourlystepcounterv2.ACTION_STOP_FOREGROUND"
 
+        // Staleness thresholds for sensor keepalive
+        const val FLUSH_THRESHOLD_MS = 60_000L            // 1 min: flush FIFO before reading
+        const val RE_REGISTER_THRESHOLD_MS = 5 * 60_000L  // 5 min: re-register after boundary
+        const val DORMANT_THRESHOLD_MS = 10 * 60_000L     // 10 min: re-register in keepalive
+
+        enum class SensorAction { NONE, FLUSH, RE_REGISTER }
+
+        fun determineSensorAction(sensorAgeMs: Long, thresholdMs: Long, lastEventTimeMs: Long): SensorAction {
+            // No event received yet — sensor is still initializing, don't re-register
+            if (lastEventTimeMs == 0L) return SensorAction.NONE
+            return when {
+                sensorAgeMs > thresholdMs -> SensorAction.RE_REGISTER
+                sensorAgeMs > FLUSH_THRESHOLD_MS -> SensorAction.FLUSH
+                else -> SensorAction.NONE
+            }
+        }
+
         fun resolvePreviousHourTimestamp(
             currentHourTimestamp: Long,
             savedHourTimestamp: Long
@@ -88,13 +105,37 @@ class StepCounterForegroundService : android.app.Service() {
             return
         }
 
-        // Periodic snapshot of device total for backfill accuracy (every 15 minutes)
+        // Periodic snapshot of device total for backfill accuracy (every 15 minutes).
+        // Also serves as sensor keepalive: flushes FIFO and re-registers if dormant.
         scope.launch {
             while (isActive) {
+                val lastEventTime = sensorManager.getLastSensorEventTime()
+                val sensorAge = System.currentTimeMillis() - lastEventTime
+                when (determineSensorAction(sensorAge, DORMANT_THRESHOLD_MS, lastEventTime)) {
+                    SensorAction.RE_REGISTER -> {
+                        android.util.Log.w(
+                            "StepCounterFGSvc",
+                            "Sensor dormant for ${sensorAge / 1000}s. Re-registering listener."
+                        )
+                        sensorManager.reRegisterListener()
+                        delay(3000) // Wait for first event after re-registration
+                    }
+                    SensorAction.FLUSH -> {
+                        android.util.Log.d(
+                            "StepCounterFGSvc",
+                            "Sensor data ${sensorAge / 1000}s old. Flushing FIFO before snapshot."
+                        )
+                        sensorManager.flushSensor()
+                        delay(2000)
+                    }
+                    SensorAction.NONE -> { /* sensor is fresh */ }
+                }
+
                 val currentTotal = sensorManager.getCurrentTotalSteps()
                 if (currentTotal > 0) {
                     preferences.saveDeviceTotalSnapshot(System.currentTimeMillis(), currentTotal)
                 }
+
                 delay(15.minutes)
             }
         }
@@ -302,6 +343,17 @@ class StepCounterForegroundService : android.app.Service() {
                         "Backfill range: ${java.util.Date(rangeStart)} -> ${java.util.Date(rangeEnd)}"
             )
 
+            // Flush sensor FIFO before reading device total for backfill
+            val sensorAgeForBackfill = System.currentTimeMillis() - sensorManager.getLastSensorEventTime()
+            if (sensorAgeForBackfill > FLUSH_THRESHOLD_MS) {
+                android.util.Log.w(
+                    "StepCounterFGSvc",
+                    "checkMissedHourBoundaries: Sensor data stale (${sensorAgeForBackfill / 1000}s old). Flushing FIFO..."
+                )
+                sensorManager.flushSensor()
+                delay(2000)
+            }
+
             val currentDeviceTotal = sensorManager.getCurrentTotalSteps()
             val previousHourStartSteps = preferences.hourStartStepCount.first()
             val savedDeviceTotal = preferences.totalStepsDevice.first()
@@ -503,6 +555,23 @@ class StepCounterForegroundService : android.app.Service() {
             }
 
             val previousHourStartStepCount = preferences.hourStartStepCount.first()
+
+            // Flush sensor FIFO to get latest step count before saving the hour.
+            // During Doze, events may be batched in the hardware FIFO.
+            val sensorAgeAtBoundary = System.currentTimeMillis() - sensorManager.getLastSensorEventTime()
+            if (sensorAgeAtBoundary > FLUSH_THRESHOLD_MS) {
+                android.util.Log.w(
+                    "StepCounterFGSvc",
+                    "handleHourBoundary: Sensor data stale (${sensorAgeAtBoundary / 1000}s old). Flushing FIFO..."
+                )
+                sensorManager.flushSensor()
+                delay(2000) // Wait for flush callback to deliver via onSensorChanged
+                val postFlushAge = System.currentTimeMillis() - sensorManager.getLastSensorEventTime()
+                android.util.Log.d(
+                    "StepCounterFGSvc",
+                    "handleHourBoundary: Post-flush sensor age=${postFlushAge / 1000}s"
+                )
+            }
 
             // Get current device total from sensor (or fallback to preferences)
             val currentDeviceTotal = sensorManager.getCurrentTotalSteps()
@@ -719,7 +788,18 @@ class StepCounterForegroundService : android.app.Service() {
             isActive = { hourBoundaryLoopActive },
             setActive = { active -> hourBoundaryLoopActive = active },
             checkMissed = { checkMissedHourBoundaries() },
-            handleBoundary = { handleHourBoundary() },
+            handleBoundary = {
+            handleHourBoundary()
+            // Re-register sensor only if it was stale during this boundary
+            val postBoundaryAge = System.currentTimeMillis() - sensorManager.getLastSensorEventTime()
+            if (postBoundaryAge > RE_REGISTER_THRESHOLD_MS) {
+                android.util.Log.w(
+                    "StepCounterFGSvc",
+                    "Sensor stale after boundary (${postBoundaryAge / 1000}s). Re-registering."
+                )
+                sensorManager.reRegisterListener()
+            }
+        },
             onBeforeDelay = { delayMs, nextHour, now ->
                 android.util.Log.i(
                     "StepCounterFGSvc",

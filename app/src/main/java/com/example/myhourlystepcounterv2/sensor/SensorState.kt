@@ -11,5 +11,6 @@ data class SensorState(
     val previousSensorValue: Int = 0,
     val wasBelowThreshold: Boolean = false,
     val currentHourSteps: Int = 0,
-    val hourTransitionInProgress: Boolean = false
+    val hourTransitionInProgress: Boolean = false,
+    val lastSensorEventTimeMs: Long = 0L
 )
