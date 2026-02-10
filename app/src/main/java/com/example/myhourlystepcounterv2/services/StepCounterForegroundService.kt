@@ -90,9 +90,24 @@ class StepCounterForegroundService : android.app.Service() {
         val database = com.example.myhourlystepcounterv2.data.StepDatabase.getDatabase(applicationContext)
         repository = com.example.myhourlystepcounterv2.data.StepRepository(database.stepDao())
 
-        // Get singleton sensor manager (already initialized by ViewModel)
+        // Get singleton sensor manager — may or may not be initialized by ViewModel
         sensorManager = com.example.myhourlystepcounterv2.sensor.StepSensorManager.getInstance(applicationContext)
         android.util.Log.d("StepCounterFGSvc", "Using shared singleton StepSensorManager for real-time notification updates")
+
+        // If the OS killed the process and restarted for this service (without UI),
+        // the sensor singleton will be recreated with isInitialized=false.
+        // Seed it from saved preferences so currentStepCount emits correct values.
+        if (!sensorManager.sensorState.value.isInitialized) {
+            scope.launch {
+                try {
+                    initializeSensorFromPreferences()
+                } catch (e: Exception) {
+                    android.util.Log.e("StepCounterFGSvc", "Error initializing sensor from preferences", e)
+                }
+            }
+        } else {
+            android.util.Log.d("StepCounterFGSvc", "Sensor already initialized (ViewModel active), skipping service-side init")
+        }
 
         // Start foreground immediately with a placeholder notification
         try {
@@ -696,6 +711,87 @@ class StepCounterForegroundService : android.app.Service() {
             nm.notify(NOTIFICATION_ID, notification)
         } catch (e: Exception) {
             android.util.Log.e("StepCounterFGSvc", "Error forcing notification update", e)
+        }
+    }
+
+    /**
+     * Initialize the sensor manager from saved preferences when the ViewModel hasn't done it.
+     * This handles the case where the OS kills and restarts the process for the foreground service
+     * without the user opening the UI (so ViewModel.initialize() never runs).
+     *
+     * Mirrors the logic in StepCounterViewModel.initialize() lines 164-193.
+     */
+    private suspend fun initializeSensorFromPreferences() {
+        // Double-check: ViewModel may have initialized between our check and this coroutine running
+        if (sensorManager.sensorState.value.isInitialized) {
+            android.util.Log.d("StepCounterFGSvc", "initializeSensorFromPreferences: Already initialized (race ok), skipping")
+            return
+        }
+
+        val savedHourTimestamp = preferences.currentHourTimestamp.first()
+        val currentHourTimestamp = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+
+        if (savedHourTimestamp == currentHourTimestamp) {
+            // Same hour as last save — seed from saved baseline (ViewModel Branch 2)
+            val baselineCandidate = preferences.hourStartStepCount.first()
+            val savedTotal = preferences.totalStepsDevice.first()
+            val currentDeviceSteps = sensorManager.getCurrentTotalSteps()
+
+            val baseline = if (baselineCandidate > 0) baselineCandidate else maxOf(savedTotal, currentDeviceSteps)
+            val knownTotal = maxOf(savedTotal, baseline, currentDeviceSteps)
+
+            sensorManager.setLastHourStartStepCount(baseline)
+            sensorManager.setLastKnownStepCount(knownTotal)
+            sensorManager.markInitialized()
+
+            android.util.Log.i(
+                "StepCounterFGSvc",
+                "initializeSensorFromPreferences: Seeded from saved prefs (same hour). " +
+                        "baseline=$baseline, knownTotal=$knownTotal, savedHour=${java.util.Date(savedHourTimestamp)}"
+            )
+        } else {
+            // Different hour or no saved timestamp — use current device total as baseline (ViewModel Branch 3)
+            var currentDeviceSteps = sensorManager.getCurrentTotalSteps()
+
+            // If sensor hasn't delivered an event yet, try fallback from preferences
+            if (currentDeviceSteps <= 0) {
+                val fallback = preferences.totalStepsDevice.first()
+                if (fallback > 0) {
+                    currentDeviceSteps = fallback
+                    android.util.Log.w(
+                        "StepCounterFGSvc",
+                        "initializeSensorFromPreferences: Sensor not ready, using preferences fallback=$fallback"
+                    )
+                }
+            }
+
+            if (currentDeviceSteps > 0) {
+                sensorManager.setLastHourStartStepCount(currentDeviceSteps)
+                sensorManager.setLastKnownStepCount(currentDeviceSteps)
+                sensorManager.markInitialized()
+
+                preferences.saveHourData(
+                    hourStartStepCount = currentDeviceSteps,
+                    currentTimestamp = currentHourTimestamp,
+                    totalSteps = currentDeviceSteps
+                )
+
+                android.util.Log.i(
+                    "StepCounterFGSvc",
+                    "initializeSensorFromPreferences: Cold start/stale prefs. " +
+                            "Seeded from device total=$currentDeviceSteps, newHour=${java.util.Date(currentHourTimestamp)}"
+                )
+            } else {
+                android.util.Log.w(
+                    "StepCounterFGSvc",
+                    "initializeSensorFromPreferences: No sensor data and no fallback available. " +
+                            "Will initialize when first sensor event arrives."
+                )
+            }
         }
     }
 
