@@ -5,6 +5,8 @@ import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.C
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.RE_REGISTER_THRESHOLD_MS
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.DORMANT_THRESHOLD_MS
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.determineSensorAction
+import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.isDeviceRebootDetected
+import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.shouldBreakCounterContinuity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -22,6 +24,56 @@ class StepCounterForegroundServiceTest {
         )
 
         assertEquals(expected, resolved)
+    }
+
+    @Test
+    fun isDeviceRebootDetected_trueWhenBootCountChanges() {
+        assertTrue(isDeviceRebootDetected(currentBootCount = 28, savedBootCount = 27))
+    }
+
+    @Test
+    fun isDeviceRebootDetected_falseWhenSavedBootCountUnknown() {
+        assertEquals(false, isDeviceRebootDetected(currentBootCount = 28, savedBootCount = -1))
+    }
+
+    @Test
+    fun isDeviceRebootDetected_falseWhenCurrentBootCountUnavailable() {
+        assertEquals(false, isDeviceRebootDetected(currentBootCount = -1, savedBootCount = 28))
+    }
+
+    @Test
+    fun shouldBreakCounterContinuity_trueWhenCounterDropsWithoutRebootFlag() {
+        assertTrue(
+            shouldBreakCounterContinuity(
+                currentDeviceTotal = 200,
+                savedDeviceTotal = 1000,
+                rebootDetected = false
+            )
+        )
+    }
+
+    @Test
+    fun shouldBreakCounterContinuity_falseWhenCounterMonotonicAndNoReboot() {
+        assertEquals(
+            false,
+            shouldBreakCounterContinuity(
+                currentDeviceTotal = 1500,
+                savedDeviceTotal = 1000,
+                rebootDetected = false
+            )
+        )
+    }
+
+    @Test
+    fun shouldBreakCounterContinuity_trueWhenRebootDetectedEvenIfMonotonic() {
+        assertEquals(
+            true,
+            shouldBreakCounterContinuity(
+                currentDeviceTotal = 1500,
+                savedDeviceTotal = 1000,
+                rebootDetected = true
+            )
+        )
     }
 }
 

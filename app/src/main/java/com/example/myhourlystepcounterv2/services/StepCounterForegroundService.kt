@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.PowerManager
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.CoroutineScope
@@ -27,6 +28,7 @@ import kotlin.time.Duration.Companion.minutes
 import com.example.myhourlystepcounterv2.R
 import com.example.myhourlystepcounterv2.data.StepPreferences
 import com.example.myhourlystepcounterv2.StepTrackerConfig
+import com.example.myhourlystepcounterv2.PermissionHelper
 
 class StepCounterForegroundService : android.app.Service() {
     companion object {
@@ -38,6 +40,7 @@ class StepCounterForegroundService : android.app.Service() {
         const val FLUSH_THRESHOLD_MS = 60_000L            // 1 min: flush FIFO before reading
         const val RE_REGISTER_THRESHOLD_MS = 5 * 60_000L  // 5 min: re-register after boundary
         const val DORMANT_THRESHOLD_MS = 10 * 60_000L     // 10 min: re-register in keepalive
+        const val CHECKPOINT_INTERVAL_MINUTES = 5L
 
         enum class SensorAction { NONE, FLUSH, RE_REGISTER }
 
@@ -65,6 +68,23 @@ class StepCounterForegroundService : android.app.Service() {
                 savedHourTimestamp
             }
         }
+
+        fun isDeviceRebootDetected(currentBootCount: Int, savedBootCount: Int): Boolean {
+            return currentBootCount > 0 &&
+                savedBootCount > 0 &&
+                currentBootCount != savedBootCount
+        }
+
+        fun shouldBreakCounterContinuity(
+            currentDeviceTotal: Int,
+            savedDeviceTotal: Int,
+            rebootDetected: Boolean
+        ): Boolean {
+            if (rebootDetected) return true
+            return currentDeviceTotal > 0 &&
+                savedDeviceTotal > 0 &&
+                currentDeviceTotal < savedDeviceTotal
+        }
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -80,6 +100,7 @@ class StepCounterForegroundService : android.app.Service() {
     @Volatile private var hourBoundaryLoopActive: Boolean = false
     @Volatile private var lastProcessedBoundaryTimestamp: Long = 0
     @Volatile private var lastStalenessLogTime: Long = 0
+    @Volatile private var lastCheckpointSkipLogTime: Long = 0
 
     @OptIn(FlowPreview::class)
     override fun onCreate() {
@@ -89,10 +110,24 @@ class StepCounterForegroundService : android.app.Service() {
         preferences = StepPreferences(applicationContext)
         val database = com.example.myhourlystepcounterv2.data.StepDatabase.getDatabase(applicationContext)
         repository = com.example.myhourlystepcounterv2.data.StepRepository(database.stepDao())
+        scope.launch {
+            val bootCount = getCurrentBootCount()
+            val savedBootCount = preferences.lastKnownBootCount.first()
+            if (bootCount > 0 && savedBootCount <= 0) {
+                preferences.saveLastKnownBootCount(bootCount)
+            }
+        }
 
         // Get singleton sensor manager — may or may not be initialized by ViewModel
         sensorManager = com.example.myhourlystepcounterv2.sensor.StepSensorManager.getInstance(applicationContext)
         android.util.Log.d("StepCounterFGSvc", "Using shared singleton StepSensorManager for real-time notification updates")
+
+        if (PermissionHelper.hasActivityRecognitionPermission(applicationContext)) {
+            sensorManager.startListening()
+            android.util.Log.i("StepCounterFGSvc", "Sensor listener started from service")
+        } else {
+            android.util.Log.w("StepCounterFGSvc", "ACTIVITY_RECOGNITION permission missing - sensor listener not started")
+        }
 
         // If the OS killed the process and restarted for this service (without UI),
         // the sensor singleton will be recreated with isInitialized=false.
@@ -120,8 +155,10 @@ class StepCounterForegroundService : android.app.Service() {
             return
         }
 
-        // Periodic snapshot of device total for backfill accuracy (every 15 minutes).
-        // Also serves as sensor keepalive: flushes FIFO and re-registers if dormant.
+        // Periodic snapshot/checkpoint loop (every 5 minutes):
+        // - Save device-total snapshots for backfill accuracy
+        // - Save in-hour DB checkpoint to reduce reboot loss window
+        // - Keep sensor alive with flush/re-register heuristics
         scope.launch {
             while (isActive) {
                 val lastEventTime = sensorManager.getLastSensorEventTime()
@@ -149,9 +186,10 @@ class StepCounterForegroundService : android.app.Service() {
                 val currentTotal = sensorManager.getCurrentTotalSteps()
                 if (currentTotal > 0) {
                     preferences.saveDeviceTotalSnapshot(System.currentTimeMillis(), currentTotal)
+                    saveCurrentHourCheckpoint(currentTotal)
                 }
 
-                delay(15.minutes)
+                delay(CHECKPOINT_INTERVAL_MINUTES.minutes)
             }
         }
 
@@ -372,6 +410,9 @@ class StepCounterForegroundService : android.app.Service() {
             val currentDeviceTotal = sensorManager.getCurrentTotalSteps()
             val previousHourStartSteps = preferences.hourStartStepCount.first()
             val savedDeviceTotal = preferences.totalStepsDevice.first()
+            val savedBootCount = preferences.lastKnownBootCount.first()
+            val currentBootCount = getCurrentBootCount()
+            val rebootDetected = isDeviceRebootDetected(currentBootCount, savedBootCount)
 
             val validSavedDeviceTotal = if (savedDeviceTotal == 0 && previousHourStartSteps > 0) {
                 android.util.Log.w(
@@ -383,8 +424,35 @@ class StepCounterForegroundService : android.app.Service() {
                 savedDeviceTotal
             }
 
+            if (rebootDetected) {
+                android.util.Log.w(
+                    "StepCounterFGSvc",
+                    "Device reboot detected (savedBootCount=$savedBootCount, currentBootCount=$currentBootCount). " +
+                        "Breaking absolute-counter continuity for missed-hour backfill."
+                )
+            }
+
+            val continuityBroken = shouldBreakCounterContinuity(
+                currentDeviceTotal = currentDeviceTotal,
+                savedDeviceTotal = validSavedDeviceTotal,
+                rebootDetected = rebootDetected
+            )
+            if (continuityBroken) {
+                android.util.Log.w(
+                    "StepCounterFGSvc",
+                    "Counter continuity broken (current=$currentDeviceTotal, saved=$validSavedDeviceTotal, reboot=$rebootDetected). " +
+                        "Will preserve checkpointed data only and wait for post-boot baseline."
+                )
+            }
+
             val deviceTotalToUse = if (currentDeviceTotal > 0) {
                 currentDeviceTotal
+            } else if (rebootDetected) {
+                android.util.Log.w(
+                    "StepCounterFGSvc",
+                    "Sensor not initialized after reboot (currentDeviceTotal=0). Avoiding stale fallback from pre-reboot total."
+                )
+                0
             } else if (validSavedDeviceTotal > 0) {
                 android.util.Log.w(
                     "StepCounterFGSvc",
@@ -399,7 +467,11 @@ class StepCounterForegroundService : android.app.Service() {
                 0
             }
 
-            val totalStepsWhileClosed = if (deviceTotalToUse > 0) deviceTotalToUse - validSavedDeviceTotal else 0
+            val totalStepsWhileClosed = if (!continuityBroken && deviceTotalToUse > 0) {
+                deviceTotalToUse - validSavedDeviceTotal
+            } else {
+                0
+            }
             if (totalStepsWhileClosed <= 0) {
                 android.util.Log.w(
                     "StepCounterFGSvc",
@@ -481,6 +553,9 @@ class StepCounterForegroundService : android.app.Service() {
                         )
                         preferences.saveLastProcessedBoundaryTimestamp(currentHourTimestamp)
                         lastProcessedBoundaryTimestamp = currentHourTimestamp
+                        if (currentBootCount > 0) {
+                            preferences.saveLastKnownBootCount(currentBootCount)
+                        }
                         preferences.saveReminderSentThisHour(false)
                         preferences.saveAchievementSentThisHour(false)
                         android.util.Log.i(
@@ -651,6 +726,10 @@ class StepCounterForegroundService : android.app.Service() {
                     currentTimestamp = currentHourTimestamp,
                     totalSteps = deviceTotal
                 )
+                val currentBootCount = getCurrentBootCount()
+                if (currentBootCount > 0) {
+                    preferences.saveLastKnownBootCount(currentBootCount)
+                }
                 android.util.Log.i(
                     "StepCounterFGSvc",
                     "Preferences synced at hour boundary: baseline=$deviceTotal, timestamp=$currentHourTimestamp, total=$deviceTotal"
@@ -734,8 +813,22 @@ class StepCounterForegroundService : android.app.Service() {
             set(java.util.Calendar.SECOND, 0)
             set(java.util.Calendar.MILLISECOND, 0)
         }.timeInMillis
+        val savedBootCount = preferences.lastKnownBootCount.first()
+        val currentBootCount = getCurrentBootCount()
+        if (savedBootCount <= 0 && currentBootCount > 0) {
+            preferences.saveLastKnownBootCount(currentBootCount)
+        }
+        val rebootDetected = isDeviceRebootDetected(currentBootCount, savedBootCount)
 
-        if (savedHourTimestamp == currentHourTimestamp) {
+        if (rebootDetected) {
+            android.util.Log.w(
+                "StepCounterFGSvc",
+                "initializeSensorFromPreferences: boot count changed ($savedBootCount -> $currentBootCount). " +
+                    "Ignoring pre-reboot cached totals."
+            )
+        }
+
+        if (!rebootDetected && savedHourTimestamp == currentHourTimestamp) {
             // Same hour as last save — seed from saved baseline (ViewModel Branch 2)
             val baselineCandidate = preferences.hourStartStepCount.first()
             val savedTotal = preferences.totalStepsDevice.first()
@@ -760,7 +853,7 @@ class StepCounterForegroundService : android.app.Service() {
             // If sensor hasn't delivered an event yet, try fallback from preferences
             if (currentDeviceSteps <= 0) {
                 val fallback = preferences.totalStepsDevice.first()
-                if (fallback > 0) {
+                if (!rebootDetected && fallback > 0) {
                     currentDeviceSteps = fallback
                     android.util.Log.w(
                         "StepCounterFGSvc",
@@ -779,6 +872,9 @@ class StepCounterForegroundService : android.app.Service() {
                     currentTimestamp = currentHourTimestamp,
                     totalSteps = currentDeviceSteps
                 )
+                if (currentBootCount > 0) {
+                    preferences.saveLastKnownBootCount(currentBootCount)
+                }
 
                 android.util.Log.i(
                     "StepCounterFGSvc",
@@ -958,5 +1054,42 @@ class StepCounterForegroundService : android.app.Service() {
         handleWakeLock(false)
         // Don't stop the singleton sensor - ViewModel may still be using it
         scope.cancel()
+    }
+
+    private fun getCurrentBootCount(): Int {
+        return try {
+            Settings.Global.getInt(contentResolver, Settings.Global.BOOT_COUNT)
+        } catch (_: Exception) {
+            -1
+        }
+    }
+
+    private suspend fun saveCurrentHourCheckpoint(currentDeviceTotal: Int) {
+        val currentHourTimestamp = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        val baseline = preferences.hourStartStepCount.first()
+        if (baseline <= 0) {
+            val now = System.currentTimeMillis()
+            val checkpointLogWindowMs = 30 * 60 * 1000L
+            if (now - lastCheckpointSkipLogTime > checkpointLogWindowMs) {
+                lastCheckpointSkipLogTime = now
+                android.util.Log.d(
+                    "StepCounterFGSvc",
+                    "Checkpoint skipped: hour baseline unavailable yet (baseline=$baseline). " +
+                        "Will checkpoint after first valid post-boot sensor baseline."
+                )
+            }
+            return
+        }
+
+        val clampedSteps = (currentDeviceTotal - baseline).coerceIn(0, StepTrackerConfig.MAX_STEPS_PER_HOUR)
+        repository.saveHourlySteps(currentHourTimestamp, clampedSteps)
+        android.util.Log.d(
+            "StepCounterFGSvc",
+            "Checkpoint saved for ${java.util.Date(currentHourTimestamp)}: steps=$clampedSteps"
+        )
     }
 }

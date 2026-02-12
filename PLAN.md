@@ -1,5 +1,48 @@
 # CURRENT STATUS & NEXT STEPS (as of 2026-02-07)
 
+## 🟢 Fix: Reboot Step-Loss Resilience (Feb 12, 2026)
+
+### Problem
+After phone reboot, some steps are lost. The app starts, but missed-hour reconciliation can incorrectly assume step-counter continuity across reboot and skip writes or reset baselines too aggressively.
+
+### Root Causes
+1. Service headless boot path did not explicitly start `TYPE_STEP_COUNTER` listening (relied on UI path).
+2. Missed-hour backfill assumed `currentDeviceTotal - savedDeviceTotal` remains valid across reboot.
+3. No periodic in-hour DB checkpoints to preserve partial-hour progress before unexpected reboot.
+4. Initialization/backfill fallback could reuse pre-reboot cached totals when sensor had not emitted post-boot yet.
+
+### Plan (Steps 1-4)
+1. **Start sensor listener from `StepCounterForegroundService`**
+   - On service boot/start, call `sensorManager.startListening()` when permission is granted.
+2. **Add reboot detection and continuity guard**
+   - Persist `Settings.Global.BOOT_COUNT` in preferences.
+   - Treat boot-count changes (or counter rollback) as broken continuity and avoid pre/post reboot subtraction math.
+3. **Add periodic current-hour checkpointing**
+   - Every 5 minutes: save current-hour partial steps to DB (`saveHourlySteps` keeps max).
+   - Continue periodic device-total snapshots for backfill.
+4. **Adjust initialization/backfill fallback behavior**
+   - If reboot detected and sensor hasn’t emitted yet, avoid stale pre-reboot fallback totals.
+   - Re-baseline from first valid post-boot reading and resume normal hourly processing.
+
+### Status
+- **Implementation:** ✅ Complete (steps 1-4 merged in app code and unit-tested).
+- **Device verification:** ✅ Completed on physical Samsung device via ADB reboot cycles.
+
+### Verification
+1. Reboot device with app running and no app UI open.
+2. Confirm service starts sensor listener and receives events post-boot.
+3. Confirm missed-hour/backfill logs show continuity-break handling when boot count changes.
+4. Confirm current-hour progress is at most one checkpoint interval behind after reboot (target: <= 5 minutes).
+5. Confirm no negative backfill deltas and no duplicate hourly rows.
+
+### Verification Results (Feb 12, 2026)
+1. **Boot cycles observed:** boot count increased `28 -> 29 -> 30`.
+2. **Boot receiver/service start confirmed:** app process started from `BootReceiver`; boot alarms rescheduled.
+3. **Service sensor start confirmed:** log contains `Sensor listener started from service`.
+4. **Checkpointing confirmed:** log contains `Checkpoint saved ...` after 5-minute interval.
+5. **Reboot-aware init confirmed:** log contains `boot count changed (29 -> 30). Ignoring pre-reboot cached totals.`
+6. **Optional deeper scenario:** missed-hour backfill continuity-break branch can be forced in a long-gap reboot simulation if needed.
+
 ## 🟡 Fix: Overnight Sensor Event Delivery Bug (Feb 7, 2026)
 
 ### Problem

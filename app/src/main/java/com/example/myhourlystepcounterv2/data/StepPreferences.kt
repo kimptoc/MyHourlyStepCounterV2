@@ -45,6 +45,7 @@ class StepPreferences(private val context: Context) {
         // Second reminder (XX:55) preferences
         val LAST_SECOND_REMINDER_TIME = longPreferencesKey("last_second_reminder_time")
         val SECOND_REMINDER_SENT_THIS_HOUR = booleanPreferencesKey("second_reminder_sent_this_hour")
+        val LAST_KNOWN_BOOT_COUNT = intPreferencesKey("last_known_boot_count")
 
         // Defaults (user requested defaults ON)
         const val PERMANENT_NOTIFICATION_DEFAULT = true
@@ -96,6 +97,9 @@ class StepPreferences(private val context: Context) {
 
     val secondReminderSentThisHour: Flow<Boolean> = context.dataStore.data
         .map { preferences -> preferences[SECOND_REMINDER_SENT_THIS_HOUR] ?: false }
+
+    val lastKnownBootCount: Flow<Int> = context.dataStore.data
+        .map { preferences -> preferences[LAST_KNOWN_BOOT_COUNT] ?: -1 }
 
     val lastProcessedBoundaryTimestamp: Flow<Long> = context.dataStore.data
         .map { preferences -> preferences[LAST_PROCESSED_BOUNDARY_TIMESTAMP] ?: 0L }
@@ -224,6 +228,14 @@ class StepPreferences(private val context: Context) {
         context.dataStore.updateData { preferences ->
             preferences.toMutablePreferences().apply {
                 this[SECOND_REMINDER_SENT_THIS_HOUR] = sent
+            }
+        }
+    }
+
+    suspend fun saveLastKnownBootCount(bootCount: Int) {
+        context.dataStore.updateData { preferences ->
+            preferences.toMutablePreferences().apply {
+                this[LAST_KNOWN_BOOT_COUNT] = bootCount
             }
         }
     }
