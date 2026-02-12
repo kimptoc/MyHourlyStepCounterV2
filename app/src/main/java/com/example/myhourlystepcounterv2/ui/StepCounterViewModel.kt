@@ -10,6 +10,7 @@ import com.example.myhourlystepcounterv2.data.StepDatabase
 import com.example.myhourlystepcounterv2.data.StepEntity
 import com.example.myhourlystepcounterv2.data.StepPreferences
 import com.example.myhourlystepcounterv2.data.StepRepository
+import com.example.myhourlystepcounterv2.resolveKnownTotalForInitialization
 import com.example.myhourlystepcounterv2.sensor.StepSensorManager
 import com.example.myhourlystepcounterv2.worker.WorkManagerScheduler
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -28,6 +29,9 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
     private lateinit var sensorManager: StepSensorManager
     private lateinit var preferences: StepPreferences
     private val uiDbWritesEnabled = false
+    private val sensorSyncTimeoutMs = 15_000L
+    private val freshEventWindowMs = 5_000L
+    @Volatile private var syncProbeStartMs: Long = 0L
 
     companion object {
         fun shouldSyncTimestamp(
@@ -40,6 +44,23 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                 sensorBaseline > 0 &&
                 sensorCurrentSteps in 0..maxStepsPerHour
         }
+
+        fun isSensorReadingFresh(
+            nowMs: Long,
+            lastEventTimeMs: Long,
+            freshEventWindowMs: Long
+        ): Boolean {
+            return lastEventTimeMs > 0 && nowMs - lastEventTimeMs <= freshEventWindowMs
+        }
+
+        fun shouldStopSyncingFromCallback(
+            isSyncing: Boolean,
+            syncProbeStartMs: Long,
+            lastEventTimeMs: Long
+        ): Boolean {
+            return isSyncing && syncProbeStartMs > 0L && lastEventTimeMs > syncProbeStartMs
+        }
+
     }
 
     // Guard to prevent duplicate initialization
@@ -48,6 +69,9 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
 
     private val _hourlySteps = MutableStateFlow(0)
     val hourlySteps: StateFlow<Int> = _hourlySteps.asStateFlow()
+
+    private val _isSyncing = MutableStateFlow(true)
+    val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
 
     private val _dailySteps = MutableStateFlow(0)
     val dailySteps: StateFlow<Int> = _dailySteps.asStateFlow()
@@ -81,8 +105,10 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
         if (PermissionHelper.hasActivityRecognitionPermission(context)) {
             sensorManager.startListening()
             android.util.Log.d("StepCounter", "Sensor listener started - ACTIVITY_RECOGNITION permission granted")
+            startSensorSyncProbe("initialize")
         } else {
             android.util.Log.w("StepCounter", "Sensor listener NOT started - ACTIVITY_RECOGNITION permission denied")
+            _isSyncing.value = false
         }
 
         // Schedule the hourly work
@@ -164,7 +190,14 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                     !sensorState.isInitialized && savedHourTimestamp == currentHourTimestamp -> {
                         val baselineCandidate = preferences.hourStartStepCount.first()
                         val baseline = if (baselineCandidate > 0) baselineCandidate else actualDeviceSteps
-                        val knownTotal = preferences.totalStepsDevice.first().let { maxOf(it, baseline, actualDeviceSteps) }
+                        val savedTotal = preferences.totalStepsDevice.first()
+                        val hasFreshSensorEvent = sensorManager.getLastSensorEventTime() > 0L
+                        val knownTotal = resolveKnownTotalForInitialization(
+                            savedTotal = savedTotal,
+                            baseline = baseline,
+                            currentDeviceSteps = actualDeviceSteps,
+                            hasFreshSensorEvent = hasFreshSensorEvent
+                        )
 
                         sensorManager.setLastHourStartStepCount(baseline)
                         sensorManager.setLastKnownStepCount(knownTotal)
@@ -201,6 +234,15 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
         viewModelScope.launch {
             sensorManager.currentStepCount.collect { steps ->
                 _hourlySteps.value = steps
+                val lastEventTime = sensorManager.getLastSensorEventTime()
+
+                if (shouldStopSyncingFromCallback(_isSyncing.value, syncProbeStartMs, lastEventTime)) {
+                    _isSyncing.value = false
+                    android.util.Log.i(
+                        "StepCounter",
+                        "Sensor sync completed via callback: eventTime=$lastEventTime, probeStart=$syncProbeStartMs"
+                    )
+                }
 
                 // Save current device steps to preferences with monotonic check
                 val newDeviceTotal = sensorManager.getCurrentTotalSteps()
@@ -319,6 +361,8 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
         }
 
         viewModelScope.launch {
+            startSensorSyncProbe("onResume")
+
             // Force recalculation based on current sensor state
             val currentTotal = sensorManager.getCurrentTotalSteps()
             val previousTotal = preferences.totalStepsDevice.first()
@@ -352,6 +396,40 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                 android.util.Log.d("StepCounter", "refreshStepCounts: Display refreshed")
             } else {
                 android.util.Log.w("StepCounter", "refreshStepCounts: Could not read sensor")
+            }
+        }
+    }
+
+    private fun startSensorSyncProbe(reason: String) {
+        viewModelScope.launch {
+            val now = System.currentTimeMillis()
+            val lastEventTime = sensorManager.getLastSensorEventTime()
+
+            if (isSensorReadingFresh(now, lastEventTime, freshEventWindowMs)) {
+                _isSyncing.value = false
+                syncProbeStartMs = 0L
+                android.util.Log.d(
+                    "StepCounter",
+                    "Sensor sync probe skipped ($reason): last event is fresh (${now - lastEventTime}ms ago)"
+                )
+                return@launch
+            }
+
+            _isSyncing.value = true
+            syncProbeStartMs = now
+
+            sensorManager.flushSensor()
+            val fresh = sensorManager.waitForSensorEventAfter(syncProbeStartMs, sensorSyncTimeoutMs)
+
+            if (fresh) {
+                _isSyncing.value = false
+                syncProbeStartMs = 0L
+                android.util.Log.i("StepCounter", "Sensor sync probe succeeded ($reason)")
+            } else {
+                android.util.Log.w(
+                    "StepCounter",
+                    "Sensor sync probe timed out ($reason). Keeping UI in syncing state until next callback."
+                )
             }
         }
     }

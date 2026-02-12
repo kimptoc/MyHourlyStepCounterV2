@@ -8,7 +8,9 @@
     <string name="reminder_channel_urgent_description">5-minute-to-hour reminder with stronger vibration (no sound).</string>
     <string name="notification_title">%1$s</string>
     <string name="notification_text_steps">This hour: %1$d — Today: %2$d</string>
+    <string name="notification_text_syncing">This hour: syncing... — Today: %1$d</string>
     <string name="notification_action_stop">Stop</string>
+    <string name="syncing_label">syncing...</string>
 
     <!-- Reminder notification strings -->
     <string name="reminder_channel_name">Step Reminder</string>

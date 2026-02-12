@@ -12,12 +12,28 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.example.myhourlystepcounterv2.data.StepPreferences
 import com.example.myhourlystepcounterv2.notifications.NotificationHelper
 import com.example.myhourlystepcounterv2.StepTrackerConfig
+
+internal suspend fun waitForFreshSensorEvent(
+    sensorState: StateFlow<SensorState>,
+    timestampMs: Long,
+    timeoutMs: Long
+): Boolean {
+    return withTimeoutOrNull(timeoutMs) {
+        sensorState.first { it.lastSensorEventTimeMs > timestampMs }
+        true
+    } ?: false
+}
+
+internal fun clampMonotonicHourSteps(previousDisplayed: Int, calculatedStepsThisHour: Int): Int {
+    return maxOf(previousDisplayed, maxOf(0, calculatedStepsThisHour))
+}
 
 class StepSensorManager private constructor(context: Context) : SensorEventListener {
     private val sensorManager = context.applicationContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
@@ -165,7 +181,18 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
 
                 // Calculate steps for current hour
                 val stepsThisHour = newState.lastKnownStepCount - newState.lastHourStartStepCount
-                val finalSteps = maxOf(0, stepsThisHour)
+                val finalSteps = clampMonotonicHourSteps(
+                    previousDisplayed = currentState.currentHourSteps,
+                    calculatedStepsThisHour = stepsThisHour
+                )
+
+                if (finalSteps > maxOf(0, stepsThisHour)) {
+                    android.util.Log.w(
+                        "StepSensor",
+                        "Non-monotonic sensor reading ignored for display: previousDisplayed=${currentState.currentHourSteps}, " +
+                                "calculatedNow=${maxOf(0, stepsThisHour)}, keeping=$finalSteps"
+                    )
+                }
 
                 android.util.Log.d(
                     "StepSensor",
@@ -392,5 +419,13 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
 
     fun getCurrentTotalSteps(): Int {
         return _sensorState.value.lastKnownStepCount
+    }
+
+    /**
+     * Waits for a new sensor callback after the provided timestamp.
+     * Returns true if a fresh event arrives before timeout.
+     */
+    suspend fun waitForSensorEventAfter(timestampMs: Long, timeoutMs: Long): Boolean {
+        return waitForFreshSensorEvent(sensorState, timestampMs, timeoutMs)
     }
 }

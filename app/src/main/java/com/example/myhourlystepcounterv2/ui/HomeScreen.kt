@@ -29,6 +29,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.TextUnit
 import com.example.myhourlystepcounterv2.StepTrackerConfig
+import com.example.myhourlystepcounterv2.R
 import com.example.myhourlystepcounterv2.ui.theme.GradientGreenEnd
 import com.example.myhourlystepcounterv2.ui.theme.GradientGreenStart
 import java.text.SimpleDateFormat
@@ -51,6 +53,7 @@ fun HomeScreen(
     modifier: Modifier = Modifier
 ) {
     val hourlySteps by viewModel.hourlySteps.collectAsState()
+    val isSyncing by viewModel.isSyncing.collectAsState()
     val dailySteps by viewModel.dailySteps.collectAsState()
     val currentTime by viewModel.currentTime.collectAsState()
 
@@ -72,7 +75,7 @@ fun HomeScreen(
 
     // Calculate progress for hourly goal (250 steps from StepTrackerConfig)
     val hourlyGoal = StepTrackerConfig.STEP_REMINDER_THRESHOLD
-    val progress = (hourlySteps.toFloat() / hourlyGoal).coerceIn(0f, 1f)
+    val progress = if (isSyncing) 0f else (hourlySteps.toFloat() / hourlyGoal).coerceIn(0f, 1f)
     val scrollState = rememberScrollState()
 
     Column(
@@ -127,6 +130,7 @@ fun HomeScreen(
 
                 HourlyStepsCard(
                     hourlySteps = hourlySteps,
+                    isSyncing = isSyncing,
                     progress = progress,
                     hourlyGoal = hourlyGoal,
                     modifier = Modifier.weight(2f)
@@ -178,6 +182,7 @@ fun HomeScreen(
             // Elevated Card for Hourly Steps with Gradient Background
             HourlyStepsCard(
                 hourlySteps = hourlySteps,
+                isSyncing = isSyncing,
                 progress = progress,
                 hourlyGoal = hourlyGoal,
                 modifier = Modifier.padding(bottom = 16.dp)
@@ -195,6 +200,7 @@ fun HomeScreen(
 @Composable
 private fun HourlyStepsCard(
     hourlySteps: Int,
+    isSyncing: Boolean,
     progress: Float,
     hourlyGoal: Int,
     modifier: Modifier = Modifier
@@ -261,15 +267,15 @@ private fun HourlyStepsCard(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            text = hourlySteps.toString(),
+                            text = if (isSyncing) stringResource(R.string.syncing_label) else hourlySteps.toString(),
                             style = MaterialTheme.typography.displayLarge.copy(
-                                fontSize = 48.sp
+                                fontSize = if (isSyncing) 28.sp else 48.sp
                             ),
                             textAlign = TextAlign.Center,
                             color = MaterialTheme.colorScheme.primary
                         )
                         Text(
-                            text = "${(progress * 100).toInt()}%",
+                            text = if (isSyncing) "" else "${(progress * 100).toInt()}%",
                             style = MaterialTheme.typography.bodyMedium,
                             textAlign = TextAlign.Center,
                             color = MaterialTheme.colorScheme.onSurfaceVariant

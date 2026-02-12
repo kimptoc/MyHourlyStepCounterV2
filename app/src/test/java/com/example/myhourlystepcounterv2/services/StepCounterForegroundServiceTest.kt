@@ -7,6 +7,8 @@ import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.C
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.determineSensorAction
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.isDeviceRebootDetected
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.shouldBreakCounterContinuity
+import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.shouldClearNotificationSyncState
+import com.example.myhourlystepcounterv2.resolveKnownTotalForInitialization
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -146,5 +148,63 @@ class SensorStalenessTest {
     fun coldStart_noEventYet_ignoresAllThresholds() {
         // Even with huge age and small threshold, 0 lastEventTime means NONE
         assertEquals(SensorAction.NONE, determineSensorAction(999_999_999L, FLUSH_THRESHOLD_MS, 0L))
+    }
+}
+
+class NotificationSyncStateTest {
+    @Test
+    fun shouldClearNotificationSyncState_true_whenSyncingAndFreshEventSeen() {
+        assertTrue(
+            shouldClearNotificationSyncState(
+                currentSyncing = true,
+                lastSensorEventTimeMs = 123L
+            )
+        )
+    }
+
+    @Test
+    fun shouldClearNotificationSyncState_false_whenAlreadyNotSyncing() {
+        assertEquals(
+            false,
+            shouldClearNotificationSyncState(
+                currentSyncing = false,
+                lastSensorEventTimeMs = 123L
+            )
+        )
+    }
+
+    @Test
+    fun shouldClearNotificationSyncState_false_whenNoSensorEventYet() {
+        assertEquals(
+            false,
+            shouldClearNotificationSyncState(
+                currentSyncing = true,
+                lastSensorEventTimeMs = 0L
+            )
+        )
+    }
+}
+
+class InitializationSeedResolutionTest {
+    @Test
+    fun resolveKnownTotalForInitialization_prefersFreshSensorReading_whenAvailable() {
+        val knownTotal = resolveKnownTotalForInitialization(
+            savedTotal = 437,
+            baseline = 13,
+            currentDeviceSteps = 13,
+            hasFreshSensorEvent = true
+        )
+        assertEquals(13, knownTotal)
+    }
+
+    @Test
+    fun resolveKnownTotalForInitialization_usesSavedWhenSensorNotFresh() {
+        val knownTotal = resolveKnownTotalForInitialization(
+            savedTotal = 437,
+            baseline = 13,
+            currentDeviceSteps = 13,
+            hasFreshSensorEvent = false
+        )
+        assertEquals(437, knownTotal)
     }
 }

@@ -20,6 +20,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -29,6 +30,7 @@ import com.example.myhourlystepcounterv2.R
 import com.example.myhourlystepcounterv2.data.StepPreferences
 import com.example.myhourlystepcounterv2.StepTrackerConfig
 import com.example.myhourlystepcounterv2.PermissionHelper
+import com.example.myhourlystepcounterv2.resolveKnownTotalForInitialization
 
 class StepCounterForegroundService : android.app.Service() {
     companion object {
@@ -41,6 +43,7 @@ class StepCounterForegroundService : android.app.Service() {
         const val RE_REGISTER_THRESHOLD_MS = 5 * 60_000L  // 5 min: re-register after boundary
         const val DORMANT_THRESHOLD_MS = 10 * 60_000L     // 10 min: re-register in keepalive
         const val CHECKPOINT_INTERVAL_MINUTES = 5L
+        const val STARTUP_SYNC_TIMEOUT_MS = 15_000L
 
         enum class SensorAction { NONE, FLUSH, RE_REGISTER }
 
@@ -85,6 +88,14 @@ class StepCounterForegroundService : android.app.Service() {
                 savedDeviceTotal > 0 &&
                 currentDeviceTotal < savedDeviceTotal
         }
+
+        fun shouldClearNotificationSyncState(
+            currentSyncing: Boolean,
+            lastSensorEventTimeMs: Long
+        ): Boolean {
+            return currentSyncing && lastSensorEventTimeMs > 0L
+        }
+
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -101,6 +112,7 @@ class StepCounterForegroundService : android.app.Service() {
     @Volatile private var lastProcessedBoundaryTimestamp: Long = 0
     @Volatile private var lastStalenessLogTime: Long = 0
     @Volatile private var lastCheckpointSkipLogTime: Long = 0
+    private val notificationSyncing = MutableStateFlow(true)
 
     @OptIn(FlowPreview::class)
     override fun onCreate() {
@@ -146,13 +158,35 @@ class StepCounterForegroundService : android.app.Service() {
 
         // Start foreground immediately with a placeholder notification
         try {
-            startForeground(NOTIFICATION_ID, buildNotification(0, 0))
+            startForeground(NOTIFICATION_ID, buildNotification(0, 0, isSyncing = true))
         } catch (e: Exception) {
             android.util.Log.e("StepCounterFGSvc", "startForeground failed", e)
             // Can't start foreground (likely disallowed while app is background) — stop to avoid crash
             scope.cancel()
             stopSelf()
             return
+        }
+
+        scope.launch {
+            val probeStart = System.currentTimeMillis()
+            sensorManager.flushSensor()
+            val fresh = sensorManager.waitForSensorEventAfter(probeStart, STARTUP_SYNC_TIMEOUT_MS)
+            notificationSyncing.value = !fresh
+            if (fresh) {
+                android.util.Log.i("StepCounterFGSvc", "Startup sync probe succeeded for notification")
+            } else {
+                android.util.Log.w("StepCounterFGSvc", "Startup sync probe timed out; notification stays in syncing state")
+            }
+        }
+
+        // Keep combine/map pipelines pure: clear syncing state from a dedicated observer.
+        scope.launch {
+            sensorManager.sensorState.collect { state ->
+                if (shouldClearNotificationSyncState(notificationSyncing.value, state.lastSensorEventTimeMs)) {
+                    notificationSyncing.value = false
+                    android.util.Log.i("StepCounterFGSvc", "Notification syncing cleared after first fresh sensor callback")
+                }
+            }
         }
 
         // Periodic snapshot/checkpoint loop (every 5 minutes):
@@ -198,8 +232,9 @@ class StepCounterForegroundService : android.app.Service() {
             combine(
                 sensorManager.currentStepCount,
                 preferences.currentHourTimestamp,
-                preferences.useWakeLock
-            ) { currentHourSteps, currentHourTimestamp, useWake ->
+                preferences.useWakeLock,
+                notificationSyncing
+            ) { currentHourSteps, currentHourTimestamp, useWake, isSyncing ->
                 android.util.Log.d("StepCounterFGSvc", "Live sensor: currentHourSteps=$currentHourSteps")
 
                 // Calculate start of day
@@ -215,20 +250,25 @@ class StepCounterForegroundService : android.app.Service() {
                 val dailyTotal = dbTotal + currentHourSteps
 
                 android.util.Log.d("StepCounterFGSvc", "Calculated: dbTotal=$dbTotal, currentHour=$currentHourSteps, daily=$dailyTotal")
-                Triple(currentHourSteps, dailyTotal, useWake)
+                StepNotificationState(
+                    currentHourSteps = currentHourSteps,
+                    dailyTotal = dailyTotal,
+                    useWakeLock = useWake,
+                    isSyncing = isSyncing
+                )
             }
             .sample(3.seconds)  // THROTTLE: Only emit once every 3 seconds to prevent notification rate limiting
-            .collect { (currentHourSteps, dailyTotal, useWake) ->
+            .collect { state ->
                 logTimestampStaleness()
-                android.util.Log.d("StepCounterFGSvc", "Notification update (throttled 3s): currentHour=$currentHourSteps, daily=$dailyTotal")
+                android.util.Log.d("StepCounterFGSvc", "Notification update (throttled 3s): currentHour=${state.currentHourSteps}, daily=${state.dailyTotal}, syncing=${state.isSyncing}")
 
                 // Update notification with correct daily total
-                val notification = buildNotification(currentHourSteps, dailyTotal)
+                val notification = buildNotification(state.currentHourSteps, state.dailyTotal, state.isSyncing)
                 val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                 nm.notify(NOTIFICATION_ID, notification)
 
                 // Handle wake-lock
-                handleWakeLock(useWake)
+                handleWakeLock(state.useWakeLock)
             }
         }
 
@@ -264,9 +304,13 @@ class StepCounterForegroundService : android.app.Service() {
 
     override fun onBind(intent: Intent?): android.os.IBinder? = null
 
-    private fun buildNotification(currentHourSteps: Int, totalSteps: Int): Notification {
+    private fun buildNotification(currentHourSteps: Int, totalSteps: Int, isSyncing: Boolean = false): Notification {
         val title = getString(R.string.app_name)
-        val text = getString(R.string.notification_text_steps, currentHourSteps, totalSteps)
+        val text = if (isSyncing) {
+            getString(R.string.notification_text_syncing, totalSteps)
+        } else {
+            getString(R.string.notification_text_steps, currentHourSteps, totalSteps)
+        }
 
         val openAppIntent = Intent(this, com.example.myhourlystepcounterv2.MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -292,6 +336,13 @@ class StepCounterForegroundService : android.app.Service() {
             .setSilent(true)
             .build()
     }
+
+    private data class StepNotificationState(
+        val currentHourSteps: Int,
+        val dailyTotal: Int,
+        val useWakeLock: Boolean,
+        val isSyncing: Boolean
+    )
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -833,9 +884,15 @@ class StepCounterForegroundService : android.app.Service() {
             val baselineCandidate = preferences.hourStartStepCount.first()
             val savedTotal = preferences.totalStepsDevice.first()
             val currentDeviceSteps = sensorManager.getCurrentTotalSteps()
+            val hasFreshSensorEvent = sensorManager.getLastSensorEventTime() > 0L
 
             val baseline = if (baselineCandidate > 0) baselineCandidate else maxOf(savedTotal, currentDeviceSteps)
-            val knownTotal = maxOf(savedTotal, baseline, currentDeviceSteps)
+            val knownTotal = resolveKnownTotalForInitialization(
+                savedTotal = savedTotal,
+                baseline = baseline,
+                currentDeviceSteps = currentDeviceSteps,
+                hasFreshSensorEvent = hasFreshSensorEvent
+            )
 
             sensorManager.setLastHourStartStepCount(baseline)
             sensorManager.setLastKnownStepCount(knownTotal)

@@ -17,6 +17,11 @@ class StepReminderReceiver : BroadcastReceiver() {
     companion object {
         const val ACTION_STEP_REMINDER = "com.example.myhourlystepcounterv2.ACTION_STEP_REMINDER"
         const val ACTION_SECOND_STEP_REMINDER = "com.example.myhourlystepcounterv2.ACTION_SECOND_STEP_REMINDER"
+        private const val REMINDER_SYNC_TIMEOUT_MS = 3_000L
+
+        fun shouldSuppressDueToSync(hasFreshReading: Boolean, currentHourSteps: Int): Boolean {
+            return !hasFreshReading && currentHourSteps == 0
+        }
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -92,12 +97,21 @@ class StepReminderReceiver : BroadcastReceiver() {
         // Get current hourly step count from shared singleton sensor
         val sensorManager = StepSensorManager.getInstance(context)
 
-        // Wait briefly to allow any pending sensor events to process
-        // This ensures we get the most recent value, especially when waking from Doze mode
-        kotlinx.coroutines.delay(500)
+        val probeStart = System.currentTimeMillis()
+        sensorManager.flushSensor()
+        val hasFreshReading = sensorManager.waitForSensorEventAfter(probeStart, REMINDER_SYNC_TIMEOUT_MS)
 
         // Read current step count from singleton (already initialized by ViewModel)
         val currentHourSteps = sensorManager.currentStepCount.first()
+
+        if (shouldSuppressDueToSync(hasFreshReading, currentHourSteps)) {
+            android.util.Log.w(
+                "StepReminder",
+                "First: Sensor still syncing (no fresh callback within ${REMINDER_SYNC_TIMEOUT_MS}ms). Skipping reminder this cycle."
+            )
+            AlarmScheduler.scheduleStepReminders(context)
+            return
+        }
 
         android.util.Log.d(
             "StepReminder",
@@ -146,12 +160,21 @@ class StepReminderReceiver : BroadcastReceiver() {
         // Get current hourly step count from shared singleton sensor
         val sensorManager = StepSensorManager.getInstance(context)
 
-        // Wait briefly to allow any pending sensor events to process
-        // This ensures we get the most recent value, especially when waking from Doze mode
-        kotlinx.coroutines.delay(500)
+        val probeStart = System.currentTimeMillis()
+        sensorManager.flushSensor()
+        val hasFreshReading = sensorManager.waitForSensorEventAfter(probeStart, REMINDER_SYNC_TIMEOUT_MS)
 
         // Read current step count from singleton (already initialized by ViewModel)
         val currentHourSteps = sensorManager.currentStepCount.first()
+
+        if (shouldSuppressDueToSync(hasFreshReading, currentHourSteps)) {
+            android.util.Log.w(
+                "StepReminder",
+                "Second: Sensor still syncing (no fresh callback within ${REMINDER_SYNC_TIMEOUT_MS}ms). Skipping reminder this cycle."
+            )
+            AlarmScheduler.scheduleSecondStepReminder(context)
+            return
+        }
 
         android.util.Log.d(
             "StepReminder",

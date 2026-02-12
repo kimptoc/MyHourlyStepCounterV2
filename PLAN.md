@@ -2514,3 +2514,17 @@ Each step is independently shippable and testable.
 - [ ] ViewModel `initialize()` is under 100 lines
 - [ ] Integration test passes for Activity recreation scenario
 - [ ] Overnight test: all hourly entries present, totals match Samsung Health within 5%
+
+---
+
+## 2026-02-12 Sensor Syncing Hotfix Plan
+
+Issue observed on-device: user walked `50+` steps, app opened with `0`, and reminder/notification reflected stale zero before first fresh sensor callback arrived.
+
+Planned + implemented in this patch:
+
+- [x] Add explicit sensor sync probing on app startup/resume (`flush + wait for fresh callback`) and expose UI sync state.
+- [x] Show `syncing...` in Home hourly card while waiting for fresh sensor callback.
+- [x] Show `syncing...` in foreground notification during startup sensor sync window.
+- [x] Suppress first/second reminder notification when sensor is still syncing and hourly steps are still zero.
+- [x] Keep normal behavior unchanged once a fresh callback arrives.
