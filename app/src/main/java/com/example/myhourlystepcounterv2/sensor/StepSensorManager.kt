@@ -305,10 +305,11 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
             scope.launch {
                 try {
                     val reminderSent = preferences.reminderSentThisHour.first()
+                    val secondReminderSent = preferences.secondReminderSentThisHour.first()
                     val achievementSent = preferences.achievementSentThisHour.first()
 
                     // Only send if reminder was sent this hour and achievement not yet sent
-                    if (reminderSent && !achievementSent) {
+                    if ((reminderSent || secondReminderSent) && !achievementSent) {
                         android.util.Log.i(
                             "StepSensor",
                             "Achievement unlocked: $currentSteps steps >= ${StepTrackerConfig.STEP_REMINDER_THRESHOLD} after reminder"

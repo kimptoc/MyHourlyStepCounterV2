@@ -6,11 +6,7 @@
 The app failed to send step reminder notifications even when the user had low step counts for the hour. The reminders were being silently skipped.
 
 ### Root Cause
-In `StepReminderReceiver.kt`, the `shouldSuppressDueToSync` function was too aggressive. It required BOTH:
-1. No fresh sensor event within 3 seconds, AND  
-2. Current hour steps = 0
-
-This meant that even if the user had valid step data from earlier in the hour (e.g., 150 steps), the notification would be skipped if they hadn't moved in the last 3 seconds - because no "fresh" sensor event arrived during that 3-second window.
+`StepReminderReceiver.kt` coupled reminder decisions to a sensor-sync suppression path. In practice, this could skip reminders when the user was sedentary and `currentHourSteps` remained 0 near trigger time, even though the correct behavior is to evaluate the threshold directly.
 
 **Evidence from device logs:**
 ```
@@ -19,31 +15,30 @@ This meant that even if the user had valid step data from earlier in the hour (e
 ```
 
 ### Fix Applied
-Changed the suppression logic in `StepReminderReceiver.kt` to only suppress when we truly have no data (`currentHourSteps == 0`):
+Removed reminder-level suppression entirely in `StepReminderReceiver.kt` and switched both reminder paths to direct threshold evaluation (`currentHourSteps < STEP_REMINDER_THRESHOLD`).
 
 ```kotlin
 // BEFORE (broken):
-fun shouldSuppressDueToSync(hasFreshReading: Boolean, currentHourSteps: Int): Boolean {
-    return !hasFreshReading && currentHourSteps == 0
+if (shouldSuppressDueToSync(...)) {
+    // skip reminder
 }
 
 // AFTER (fixed):
-fun shouldSuppressDueToSync(currentHourSteps: Int): Boolean {
-    return currentHourSteps == 0
+if (currentHourSteps < StepTrackerConfig.STEP_REMINDER_THRESHOLD) {
+    // send reminder
 }
 ```
 
 Now:
-- If step count > 0 → send notification (regardless of when last sensor event was)
-- If step count == 0 → suppress (sensor isn't providing data)
+- `:50` and `:55` reminders are based only on threshold comparison.
+- No extra sync-suppression gate can skip reminders.
 
 ### Files Modified
 - `app/src/main/java/com/example/myhourlystepcounterv2/notifications/StepReminderReceiver.kt`
-- `app/src/test/java/com/example/myhourlystepcounterv2/notifications/StepReminderSyncSuppressionTest.kt`
 
 ### Status
 - **Implementation:** ✅ Complete
-- **Unit tests:** ✅ Updated and passing
+- **Unit tests:** ✅ Obsolete suppression test removed
 - **Build:** ✅ Successful
 
 ---

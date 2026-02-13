@@ -608,6 +608,7 @@ class StepCounterForegroundService : android.app.Service() {
                             preferences.saveLastKnownBootCount(currentBootCount)
                         }
                         preferences.saveReminderSentThisHour(false)
+                        preferences.saveSecondReminderSentThisHour(false)
                         preferences.saveAchievementSentThisHour(false)
                         android.util.Log.i(
                             "StepCounterFGSvc",
@@ -788,6 +789,7 @@ class StepCounterForegroundService : android.app.Service() {
 
                 // Reset reminder/achievement flags for new hour
                 preferences.saveReminderSentThisHour(false)
+                preferences.saveSecondReminderSentThisHour(false)
                 preferences.saveAchievementSentThisHour(false)
 
                 android.util.Log.i(
