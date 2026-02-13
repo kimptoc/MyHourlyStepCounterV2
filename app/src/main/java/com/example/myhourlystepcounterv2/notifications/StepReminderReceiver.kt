@@ -17,10 +17,15 @@ class StepReminderReceiver : BroadcastReceiver() {
     companion object {
         const val ACTION_STEP_REMINDER = "com.example.myhourlystepcounterv2.ACTION_STEP_REMINDER"
         const val ACTION_SECOND_STEP_REMINDER = "com.example.myhourlystepcounterv2.ACTION_SECOND_STEP_REMINDER"
-        private const val REMINDER_SYNC_TIMEOUT_MS = 3_000L
 
-        fun shouldSuppressDueToSync(hasFreshReading: Boolean, currentHourSteps: Int): Boolean {
-            return !hasFreshReading && currentHourSteps == 0
+        fun shouldSuppressDueToSync(currentHourSteps: Int): Boolean {
+            // Reminder receivers intentionally do not block on sensor flush/wait.
+            // They should use the latest shared hourly count and return quickly; a 0 value means
+            // "no current-hour data yet" for this cycle, so we skip and rely on the next reminder.
+            // Only suppress if we have no valid data at all - not just when there's no recent sensor callback
+            // If we have cached steps > 0, use that even if no fresh callback arrives
+            // This prevents skipping reminders when user is sedentary (no recent sensor events)
+            return currentHourSteps == 0
         }
     }
 
@@ -97,17 +102,13 @@ class StepReminderReceiver : BroadcastReceiver() {
         // Get current hourly step count from shared singleton sensor
         val sensorManager = StepSensorManager.getInstance(context)
 
-        val probeStart = System.currentTimeMillis()
-        sensorManager.flushSensor()
-        val hasFreshReading = sensorManager.waitForSensorEventAfter(probeStart, REMINDER_SYNC_TIMEOUT_MS)
-
         // Read current step count from singleton (already initialized by ViewModel)
         val currentHourSteps = sensorManager.currentStepCount.first()
 
-        if (shouldSuppressDueToSync(hasFreshReading, currentHourSteps)) {
+        if (shouldSuppressDueToSync(currentHourSteps)) {
             android.util.Log.w(
                 "StepReminder",
-                "First: Sensor still syncing (no fresh callback within ${REMINDER_SYNC_TIMEOUT_MS}ms). Skipping reminder this cycle."
+                "First: No step data for current hour (steps=0). Skipping reminder."
             )
             AlarmScheduler.scheduleStepReminders(context)
             return
@@ -160,17 +161,13 @@ class StepReminderReceiver : BroadcastReceiver() {
         // Get current hourly step count from shared singleton sensor
         val sensorManager = StepSensorManager.getInstance(context)
 
-        val probeStart = System.currentTimeMillis()
-        sensorManager.flushSensor()
-        val hasFreshReading = sensorManager.waitForSensorEventAfter(probeStart, REMINDER_SYNC_TIMEOUT_MS)
-
         // Read current step count from singleton (already initialized by ViewModel)
         val currentHourSteps = sensorManager.currentStepCount.first()
 
-        if (shouldSuppressDueToSync(hasFreshReading, currentHourSteps)) {
+        if (shouldSuppressDueToSync(currentHourSteps)) {
             android.util.Log.w(
                 "StepReminder",
-                "Second: Sensor still syncing (no fresh callback within ${REMINDER_SYNC_TIMEOUT_MS}ms). Skipping reminder this cycle."
+                "Second: No step data for current hour (steps=0). Skipping reminder."
             )
             AlarmScheduler.scheduleSecondStepReminder(context)
             return

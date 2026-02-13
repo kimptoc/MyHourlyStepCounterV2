@@ -7,20 +7,9 @@ import org.junit.Test
 class StepReminderSyncSuppressionTest {
 
     @Test
-    fun shouldSuppressDueToSync_true_whenNoFreshReadingAndZeroSteps() {
+    fun shouldSuppressDueToSync_true_whenNoSteps() {
         assertTrue(
             StepReminderReceiver.shouldSuppressDueToSync(
-                hasFreshReading = false,
-                currentHourSteps = 0
-            )
-        )
-    }
-
-    @Test
-    fun shouldSuppressDueToSync_false_whenFreshReadingExists() {
-        assertFalse(
-            StepReminderReceiver.shouldSuppressDueToSync(
-                hasFreshReading = true,
                 currentHourSteps = 0
             )
         )
@@ -30,8 +19,17 @@ class StepReminderSyncSuppressionTest {
     fun shouldSuppressDueToSync_false_whenStepsAlreadyNonZero() {
         assertFalse(
             StepReminderReceiver.shouldSuppressDueToSync(
-                hasFreshReading = false,
                 currentHourSteps = 12
+            )
+        )
+    }
+
+    @Test
+    fun shouldSuppressDueToSync_false_evenIfNoRecentSensorEvent() {
+        // Even with no recent sensor callback, we should still send notification if we have cached steps
+        assertFalse(
+            StepReminderReceiver.shouldSuppressDueToSync(
+                currentHourSteps = 100
             )
         )
     }

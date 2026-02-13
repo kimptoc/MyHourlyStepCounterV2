@@ -1,4 +1,52 @@
-# CURRENT STATUS & NEXT STEPS (as of 2026-02-07)
+# CURRENT STATUS & NEXT STEPS (as of 2026-02-13)
+
+## 🟢 Fix: Step Reminder Notifications Not Sent (Feb 13, 2026)
+
+### Problem
+The app failed to send step reminder notifications even when the user had low step counts for the hour. The reminders were being silently skipped.
+
+### Root Cause
+In `StepReminderReceiver.kt`, the `shouldSuppressDueToSync` function was too aggressive. It required BOTH:
+1. No fresh sensor event within 3 seconds, AND  
+2. Current hour steps = 0
+
+This meant that even if the user had valid step data from earlier in the hour (e.g., 150 steps), the notification would be skipped if they hadn't moved in the last 3 seconds - because no "fresh" sensor event arrived during that 3-second window.
+
+**Evidence from device logs:**
+```
+02-13 19:50:03.011 W/StepReminder: First: Sensor still syncing (no fresh callback within 3000ms). Skipping reminder this cycle.
+02-13 19:55:03.009 W/StepReminder: Second: Sensor still syncing (no fresh callback within 3000ms). Skipping reminder this cycle.
+```
+
+### Fix Applied
+Changed the suppression logic in `StepReminderReceiver.kt` to only suppress when we truly have no data (`currentHourSteps == 0`):
+
+```kotlin
+// BEFORE (broken):
+fun shouldSuppressDueToSync(hasFreshReading: Boolean, currentHourSteps: Int): Boolean {
+    return !hasFreshReading && currentHourSteps == 0
+}
+
+// AFTER (fixed):
+fun shouldSuppressDueToSync(currentHourSteps: Int): Boolean {
+    return currentHourSteps == 0
+}
+```
+
+Now:
+- If step count > 0 → send notification (regardless of when last sensor event was)
+- If step count == 0 → suppress (sensor isn't providing data)
+
+### Files Modified
+- `app/src/main/java/com/example/myhourlystepcounterv2/notifications/StepReminderReceiver.kt`
+- `app/src/test/java/com/example/myhourlystepcounterv2/notifications/StepReminderSyncSuppressionTest.kt`
+
+### Status
+- **Implementation:** ✅ Complete
+- **Unit tests:** ✅ Updated and passing
+- **Build:** ✅ Successful
+
+---
 
 ## 🟢 Fix: Reboot Step-Loss Resilience (Feb 12, 2026)
 
