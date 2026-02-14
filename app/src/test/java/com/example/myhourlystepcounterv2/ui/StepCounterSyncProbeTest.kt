@@ -60,6 +60,47 @@ class StepCounterSyncProbeTest {
     }
 
     @Test
+    fun shouldClearSyncingOnProbeTimeout_true_whenSensorAlreadyInitialized() {
+        assertTrue(
+            StepCounterViewModel.shouldClearSyncingOnProbeTimeout(
+                isSensorInitialized = true,
+                knownHourlySteps = 0,
+                knownTotalSteps = 0
+            )
+        )
+    }
+
+    @Test
+    fun shouldClearSyncingOnProbeTimeout_true_whenKnownStepsExist() {
+        assertTrue(
+            StepCounterViewModel.shouldClearSyncingOnProbeTimeout(
+                isSensorInitialized = false,
+                knownHourlySteps = 12,
+                knownTotalSteps = 0
+            )
+        )
+
+        assertTrue(
+            StepCounterViewModel.shouldClearSyncingOnProbeTimeout(
+                isSensorInitialized = false,
+                knownHourlySteps = 0,
+                knownTotalSteps = 345
+            )
+        )
+    }
+
+    @Test
+    fun shouldClearSyncingOnProbeTimeout_false_whenNoUsableDataExists() {
+        assertFalse(
+            StepCounterViewModel.shouldClearSyncingOnProbeTimeout(
+                isSensorInitialized = false,
+                knownHourlySteps = 0,
+                knownTotalSteps = 0
+            )
+        )
+    }
+
+    @Test
     fun resolveKnownTotalForInitialization_prefersFreshSensorOverStalePrefs() {
         val knownTotal = resolveKnownTotalForInitialization(
             savedTotal = 437,

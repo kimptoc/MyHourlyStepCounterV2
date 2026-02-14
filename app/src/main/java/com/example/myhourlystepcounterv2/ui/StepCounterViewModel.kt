@@ -61,6 +61,14 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
             return isSyncing && syncProbeStartMs > 0L && lastEventTimeMs > syncProbeStartMs
         }
 
+        fun shouldClearSyncingOnProbeTimeout(
+            isSensorInitialized: Boolean,
+            knownHourlySteps: Int,
+            knownTotalSteps: Int
+        ): Boolean {
+            return isSensorInitialized || knownHourlySteps > 0 || knownTotalSteps > 0
+        }
+
     }
 
     // Guard to prevent duplicate initialization
@@ -426,10 +434,30 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                 syncProbeStartMs = 0L
                 android.util.Log.i("StepCounter", "Sensor sync probe succeeded ($reason)")
             } else {
-                android.util.Log.w(
-                    "StepCounter",
-                    "Sensor sync probe timed out ($reason). Keeping UI in syncing state until next callback."
+                val state = sensorManager.sensorState.value
+                val knownHourly = sensorManager.currentStepCount.value
+                val knownTotal = sensorManager.getCurrentTotalSteps()
+                val hasUsableData = shouldClearSyncingOnProbeTimeout(
+                    isSensorInitialized = state.isInitialized,
+                    knownHourlySteps = knownHourly,
+                    knownTotalSteps = knownTotal
                 )
+
+                if (hasUsableData) {
+                    _isSyncing.value = false
+                    syncProbeStartMs = 0L
+                    android.util.Log.w(
+                        "StepCounter",
+                        "Sensor sync probe timed out ($reason), but cached data is available " +
+                            "(initialized=${state.isInitialized}, hourly=$knownHourly, total=$knownTotal). " +
+                            "Showing steps instead of syncing."
+                    )
+                } else {
+                    android.util.Log.w(
+                        "StepCounter",
+                        "Sensor sync probe timed out ($reason). Keeping UI in syncing state until next callback."
+                    )
+                }
             }
         }
     }

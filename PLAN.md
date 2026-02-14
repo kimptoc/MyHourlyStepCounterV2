@@ -1,4 +1,35 @@
-# CURRENT STATUS & NEXT STEPS (as of 2026-02-13)
+# CURRENT STATUS & NEXT STEPS (as of 2026-02-14)
+
+## 🟢 Fix: UI Could Stay Stuck On "syncing..." While Steps Were Available (Feb 14, 2026)
+
+### Problem
+Home UI could continue showing `syncing...` for "This hour" even after walking, while the foreground notification and sensor pipeline already had valid hourly steps.
+
+### Root Cause
+In `StepCounterViewModel.startSensorSyncProbe()`, when the sync probe timed out, `_isSyncing` remained `true` until a strictly newer callback was observed after probe start.
+
+That behavior was too strict when usable step state already existed (initialized sensor state, non-zero hourly steps, or non-zero total). In that case, UI could stay on `syncing...` despite valid data being present.
+
+### Fix Applied
+Updated the sync-timeout branch to fall back to existing known data:
+- If cached/initialized data is available, clear `_isSyncing` immediately and show steps.
+- Only keep syncing when there is truly no usable data yet.
+
+### Files Modified
+- `app/src/main/java/com/example/myhourlystepcounterv2/ui/StepCounterViewModel.kt`
+
+### Device Verification (Feb 14, 2026)
+After installing debug build to connected phone:
+- `22:25:48.935` `Notification syncing cleared after first fresh sensor callback`
+- `22:25:48.959` `Sensor sync probe skipped (initialize): last event is fresh`
+- `22:25:51.943` `Notification update ... syncing=false`
+- Notification dump showed normal text, not syncing: `This hour: 83 — Today: 7888`
+
+### Status
+- **Implementation:** ✅ Complete
+- **Build:** ✅ Successful
+- **Installed to device:** ✅ Successful
+- **On-device log validation:** ✅ Successful
 
 ## 🟢 Fix: Step Reminder Notifications Not Sent (Feb 13, 2026)
 
@@ -19,7 +50,7 @@ Removed reminder-level suppression entirely in `StepReminderReceiver.kt` and swi
 
 ```kotlin
 // BEFORE (broken):
-if (shouldSuppressDueToSync(...)) {
+if (isSuppressedBySyncGate) {
     // skip reminder
 }
 
@@ -2569,5 +2600,5 @@ Planned + implemented in this patch:
 - [x] Add explicit sensor sync probing on app startup/resume (`flush + wait for fresh callback`) and expose UI sync state.
 - [x] Show `syncing...` in Home hourly card while waiting for fresh sensor callback.
 - [x] Show `syncing...` in foreground notification during startup sensor sync window.
-- [x] Suppress first/second reminder notification when sensor is still syncing and hourly steps are still zero.
+- [x] Reminder notifications evaluate threshold directly (`currentHourSteps < STEP_REMINDER_THRESHOLD`) with no extra sync-based suppression gate.
 - [x] Keep normal behavior unchanged once a fresh callback arrives.
