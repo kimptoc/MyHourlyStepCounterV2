@@ -13,8 +13,10 @@ import com.example.myhourlystepcounterv2.StepTrackerConfig
 
 object NotificationHelper {
     private const val CHANNEL_ID = "step_reminder_channel"
-    private const val URGENT_CHANNEL_ID = "step_reminder_urgent_channel"
+    private const val URGENT_CHANNEL_ID = "step_reminder_urgent_channel_v2"
+    private const val LEGACY_URGENT_CHANNEL_ID = "step_reminder_urgent_channel"
     private const val NOTIFICATION_ID = 100
+    private const val URGENT_NOTIFICATION_ID = 102
     private const val ACHIEVEMENT_NOTIFICATION_ID = 101
 
     fun sendStepReminderNotification(context: Context, currentSteps: Int) {
@@ -76,6 +78,15 @@ object NotificationHelper {
                     StepTrackerConfig.STEP_REMINDER_THRESHOLD
                 )
             )
+            .setStyle(
+                NotificationCompat.BigTextStyle().bigText(
+                    context.getString(
+                        R.string.second_reminder_notification_text,
+                        currentSteps,
+                        StepTrackerConfig.STEP_REMINDER_THRESHOLD
+                    )
+                )
+            )
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setContentIntent(pendingIntent)
@@ -85,8 +96,8 @@ object NotificationHelper {
             .build()
 
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        // Use same notification ID to replace the first reminder
-        notificationManager.notify(NOTIFICATION_ID, notification)
+        // Use a dedicated ID so :55 posts as a fresh alert (more noticeable on Samsung)
+        notificationManager.notify(URGENT_NOTIFICATION_ID, notification)
     }
 
     fun sendStepAchievementNotification(context: Context, currentSteps: Int) {
@@ -145,6 +156,10 @@ object NotificationHelper {
             val name = context.getString(R.string.reminder_channel_urgent_name)
             val descriptionText = context.getString(R.string.reminder_channel_urgent_description)
             val importance = NotificationManager.IMPORTANCE_HIGH
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+            // Cleanup old urgent channel after channel versioning to avoid stale settings entries.
+            notificationManager.deleteNotificationChannel(LEGACY_URGENT_CHANNEL_ID)
 
             val channel = NotificationChannel(URGENT_CHANNEL_ID, name, importance).apply {
                 description = descriptionText
@@ -153,7 +168,6 @@ object NotificationHelper {
                 setSound(null, null)
             }
 
-            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.createNotificationChannel(channel)
         }
     }

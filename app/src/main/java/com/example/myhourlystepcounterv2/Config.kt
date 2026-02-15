@@ -56,10 +56,11 @@ object StepTrackerConfig {
 
     /**
      * Vibration pattern for urgent reminder channel (XX:55).
-     * Triple buzz pattern: [delay, vibrate, pause, vibrate, pause, vibrate]
-     * Total duration: ~1850ms with 3 vibrations
+     * More forceful cadence than the first reminder to feel distinct on Samsung devices.
+     * Pattern: [delay, vibrate, pause, vibrate, pause, vibrate]
+     * Total duration: ~3.2s with progressively longer pulses.
      */
-    val URGENT_REMINDER_VIBRATION_PATTERN = longArrayOf(0, 600, 200, 600, 200, 600)
+    val URGENT_REMINDER_VIBRATION_PATTERN = longArrayOf(0, 800, 220, 900, 220, 1100)
 
     /**
      * String representations for display

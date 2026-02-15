@@ -1,4 +1,37 @@
-# CURRENT STATUS & NEXT STEPS (as of 2026-02-14)
+# CURRENT STATUS & NEXT STEPS (as of 2026-02-15)
+
+## 🟢 Fix: Make `:55` Reminder More Noticeable On Samsung (Feb 15, 2026)
+
+### Problem
+Users reported that `:50` and `:55` reminders felt almost identical on Samsung phones, so the final reminder did not feel urgent enough.
+
+### Root Cause
+- `:55` used the same notification ID as `:50`, so it replaced/updated the same notification instead of posting as a fresh alert.
+- Existing urgent channel settings can become sticky/user-locked on Samsung, making app-side tuning less effective without channel versioning.
+
+### Fix Applied
+- `:55` now posts with its own notification ID (`URGENT_NOTIFICATION_ID`) instead of replacing `:50`.
+- Urgent channel was versioned to `step_reminder_urgent_channel_v2` so new channel defaults apply.
+- Urgent haptics were strengthened with a longer, more forceful vibration cadence.
+- Urgent title/body wording was updated to emphasize “Final 5-minute warning.”
+- Kept urgent reminder haptics-only (no sound), as requested.
+
+### Files Modified
+- `app/src/main/java/com/example/myhourlystepcounterv2/notifications/NotificationHelper.kt`
+- `app/src/main/java/com/example/myhourlystepcounterv2/Config.kt`
+- `app/src/main/res/values/strings.xml`
+
+### Validation Plan
+- Confirm build/tests pass.
+- On-device check at `:50`/`:55`:
+  - `:55` posts as a separate notification (not an in-place replacement).
+  - urgent channel id is `step_reminder_urgent_channel_v2`.
+  - `:55` haptic is clearly stronger/different than `:50`.
+
+### Status
+- **Implementation:** ✅ Complete
+- **Build:** ✅ Successful (`:app:compileDebugKotlin`, `:app:testDebugUnitTest`)
+- **Device verification:** ⏳ Pending next reminder cycle
 
 ## 🟢 Fix: UI Could Stay Stuck On "syncing..." While Steps Were Available (Feb 14, 2026)
 
