@@ -234,19 +234,35 @@ class StepCounterForegroundService : android.app.Service() {
                 preferences.currentHourTimestamp,
                 preferences.useWakeLock,
                 notificationSyncing
-            ) { currentHourSteps, currentHourTimestamp, useWake, isSyncing ->
+            ) { currentHourSteps, savedHourTimestamp, useWake, isSyncing ->
                 android.util.Log.d("StepCounterFGSvc", "Live sensor: currentHourSteps=$currentHourSteps")
 
-                // Calculate start of day
-                val startOfDay = java.util.Calendar.getInstance().apply {
-                    set(java.util.Calendar.HOUR_OF_DAY, 0)
+                // Use wall-clock hour for DB exclusion to prevent overcount when
+                // saved currentHourTimestamp is stale (e.g. hour boundary not yet processed).
+                // A stale saved timestamp would fail to exclude the checkpoint row for
+                // the current hour, double-counting those steps.
+                val now = java.util.Calendar.getInstance()
+                val startOfDay = now.clone().let { it as java.util.Calendar
+                    it.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                    it.set(java.util.Calendar.MINUTE, 0)
+                    it.set(java.util.Calendar.SECOND, 0)
+                    it.set(java.util.Calendar.MILLISECOND, 0)
+                    it.timeInMillis
+                }
+                val wallClockHourTimestamp = now.apply {
                     set(java.util.Calendar.MINUTE, 0)
                     set(java.util.Calendar.SECOND, 0)
                     set(java.util.Calendar.MILLISECOND, 0)
                 }.timeInMillis
 
-                // Get daily total from database (excluding current hour)
-                val dbTotal = repository.getTotalStepsForDayExcludingCurrentHour(startOfDay, currentHourTimestamp).first() ?: 0
+                if (savedHourTimestamp > 0 && wallClockHourTimestamp != savedHourTimestamp) {
+                    android.util.Log.w("StepCounterFGSvc",
+                        "Notification daily query: using wall-clock hour ${java.util.Date(wallClockHourTimestamp)} " +
+                            "instead of stale saved ${java.util.Date(savedHourTimestamp)}")
+                }
+
+                // Get daily total from database (excluding current hour by wall-clock)
+                val dbTotal = repository.getTotalStepsForDayExcludingCurrentHour(startOfDay, wallClockHourTimestamp).first() ?: 0
                 val dailyTotal = dbTotal + currentHourSteps
 
                 android.util.Log.d("StepCounterFGSvc", "Calculated: dbTotal=$dbTotal, currentHour=$currentHourSteps, daily=$dailyTotal")
@@ -822,18 +838,24 @@ class StepCounterForegroundService : android.app.Service() {
     private suspend fun updateNotificationImmediately() {
         try {
             val currentHourSteps = sensorManager.currentStepCount.first()
-            val currentHourTimestamp = preferences.currentHourTimestamp.first()
-            
-            // Calculate start of day
-            val startOfDay = java.util.Calendar.getInstance().apply {
-                set(java.util.Calendar.HOUR_OF_DAY, 0)
+
+            // Use wall-clock hour for DB exclusion (same rationale as notification combine flow)
+            val now = java.util.Calendar.getInstance()
+            val startOfDay = now.clone().let { it as java.util.Calendar
+                it.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                it.set(java.util.Calendar.MINUTE, 0)
+                it.set(java.util.Calendar.SECOND, 0)
+                it.set(java.util.Calendar.MILLISECOND, 0)
+                it.timeInMillis
+            }
+            val wallClockHourTimestamp = now.apply {
                 set(java.util.Calendar.MINUTE, 0)
                 set(java.util.Calendar.SECOND, 0)
                 set(java.util.Calendar.MILLISECOND, 0)
             }.timeInMillis
 
-            // Get daily total from database (excluding current hour)
-            val dbTotal = repository.getTotalStepsForDayExcludingCurrentHour(startOfDay, currentHourTimestamp).first() ?: 0
+            // Get daily total from database (excluding current hour by wall-clock)
+            val dbTotal = repository.getTotalStepsForDayExcludingCurrentHour(startOfDay, wallClockHourTimestamp).first() ?: 0
             val dailyTotal = dbTotal + currentHourSteps
 
             android.util.Log.i("StepCounterFGSvc", "Forcing immediate notification update: hour=$currentHourSteps, daily=$dailyTotal")
@@ -978,16 +1000,16 @@ class StepCounterForegroundService : android.app.Service() {
         }.timeInMillis
         val savedHourTimestamp = preferences.currentHourTimestamp.first()
         val driftMs = currentHourTimestamp - savedHourTimestamp
-        val twoHoursMs = 2 * 60 * 60 * 1000L
-        if (savedHourTimestamp > 0 && driftMs > twoHoursMs) {
+        val oneHourMs = 60 * 60 * 1000L
+        if (savedHourTimestamp > 0 && driftMs >= oneHourMs) {
             val now = System.currentTimeMillis()
-            if (now - lastStalenessLogTime > twoHoursMs) {
+            if (now - lastStalenessLogTime > oneHourMs) {
                 lastStalenessLogTime = now
                 android.util.Log.e(
                     "StepCounterFGSvc",
                     "Stale currentHourTimestamp detected while service running: " +
                         "saved=${java.util.Date(savedHourTimestamp)} current=${java.util.Date(currentHourTimestamp)} " +
-                        "driftHours=${driftMs / (60 * 60 * 1000)}"
+                        "driftHours=${driftMs / oneHourMs}"
                 )
             }
         }

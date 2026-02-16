@@ -1,5 +1,45 @@
 # CURRENT STATUS & NEXT STEPS (as of 2026-02-15)
 
+## 🟢 Fix: Temporary Daily Total Overcount In Notification (Feb 16, 2026)
+
+### Problem
+User observed the foreground notification daily total appearing about `~50` steps too high, then correcting after opening the app.
+
+### Observed Behavior
+- Mismatch appears transient (notification only), then self-corrects when app UI is opened.
+- Recent captured logs show consistent values at observation time (`daily=465` in both service/UI), but user-reported mismatch likely occurred earlier in the buffer window.
+
+### Likely Root Cause (Hypothesis)
+`StepCounterForegroundService` computes notification daily total using saved `preferences.currentHourTimestamp` as the "exclude current hour" key:
+- `daily = getTotalStepsForDayExcludingCurrentHour(startOfDay, currentHourTimestamp) + currentHourSteps`
+
+If saved `currentHourTimestamp` is stale by ~1 hour, DB totals can include a current-hour checkpoint row and then add live current-hour steps again, causing a temporary overcount roughly equal to current-hour steps (often around `~50`).
+
+Opening the app can resync timestamp state in ViewModel/service flows, which then removes the double-count and makes totals appear to "fix themselves."
+
+### Relevant Code Paths
+- `app/src/main/java/com/example/myhourlystepcounterv2/services/StepCounterForegroundService.kt`
+  - daily-notification combine path around `currentHourTimestamp` and DB exclusion query
+  - periodic checkpoint writes for current hour
+  - timestamp staleness logging (`logTimestampStaleness`)
+- `app/src/main/java/com/example/myhourlystepcounterv2/ui/StepCounterViewModel.kt`
+  - UI initialization/resync behavior that may refresh timestamp state on app open
+
+### Fix Applied
+1. **Wall-clock hour for DB exclusion:** Both notification paths (combine flow + `updateNotificationImmediately()`) now compute the current hour from wall-clock time instead of reading the saved `preferences.currentHourTimestamp`. This ensures the checkpoint row for the current hour is always excluded, even if `handleHourBoundary()` hasn't fired yet.
+2. **Staleness log threshold lowered:** `logTimestampStaleness()` now alerts at >1 hour drift (was >2 hours), catching the most common single-boundary-miss case.
+3. **Focused stale-timestamp log:** The notification combine flow now logs a warning when wall-clock hour differs from saved preference, making future occurrences visible in logcat.
+
+### Files Modified
+- `app/src/main/java/com/example/myhourlystepcounterv2/services/StepCounterForegroundService.kt`
+
+### Status
+- **Investigation:** ✅ Logged
+- **Implementation:** ✅ Complete
+- **Build:** ✅ Successful
+- **Unit tests:** ✅ All passing
+- **Device verification:** ⏳ Pending next hour-boundary cycle
+
 ## 🟢 Fix: Make `:55` Reminder More Noticeable On Samsung (Feb 15, 2026)
 
 ### Problem
