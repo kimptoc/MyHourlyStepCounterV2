@@ -7,8 +7,10 @@
     <string name="reminder_channel_urgent_name">Final step reminder (5 min)</string>
     <string name="reminder_channel_urgent_description">Final 5-minute warning before the hour ends with stronger vibration (no sound).</string>
     <string name="notification_title">%1$s</string>
-    <string name="notification_text_steps">This hour: %1$d — Today: %2$d</string>
-    <string name="notification_text_syncing">This hour: syncing... — Today: %1$d</string>
+    <string name="notification_text_steps">📅 %1$d today</string>
+    <string name="notification_text_syncing">📅 %1$d today</string>
+    <string name="notification_title_steps">👣 %1$d steps this hour</string>
+    <string name="notification_title_syncing">👣 syncing…</string>
     <string name="notification_action_stop">Stop</string>
     <string name="syncing_label">syncing...</string>
 
