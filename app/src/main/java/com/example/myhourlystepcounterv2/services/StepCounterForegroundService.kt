@@ -321,12 +321,12 @@ class StepCounterForegroundService : android.app.Service() {
     override fun onBind(intent: Intent?): android.os.IBinder? = null
 
     private fun buildNotification(currentHourSteps: Int, totalSteps: Int, isSyncing: Boolean = false): Notification {
-        val title = getString(R.string.app_name)
-        val text = if (isSyncing) {
-            getString(R.string.notification_text_syncing, totalSteps)
+        val title = if (isSyncing) {
+            getString(R.string.notification_title_syncing)
         } else {
-            getString(R.string.notification_text_steps, currentHourSteps, totalSteps)
+            getString(R.string.notification_title_steps, currentHourSteps)
         }
+        val text = getString(R.string.notification_text_steps, totalSteps)
 
         val openAppIntent = Intent(this, com.example.myhourlystepcounterv2.MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
