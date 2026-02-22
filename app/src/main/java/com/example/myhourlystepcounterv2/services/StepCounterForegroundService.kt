@@ -37,6 +37,8 @@ class StepCounterForegroundService : android.app.Service() {
         const val CHANNEL_ID = "step_counter_channel_v4"
         const val NOTIFICATION_ID = 42
         const val ACTION_STOP = "com.example.myhourlystepcounterv2.ACTION_STOP_FOREGROUND"
+        const val ACTIVE_WINDOW_START_HOUR = 8
+        const val ACTIVE_WINDOW_END_HOUR = 22
 
         // Staleness thresholds for sensor keepalive
         const val FLUSH_THRESHOLD_MS = 60_000L            // 1 min: flush FIFO before reading
@@ -113,6 +115,12 @@ class StepCounterForegroundService : android.app.Service() {
     @Volatile private var lastStalenessLogTime: Long = 0
     @Volatile private var lastCheckpointSkipLogTime: Long = 0
     private val notificationSyncing = MutableStateFlow(true)
+    private data class TimelinePresentation(
+        val statesExpanded: String,
+        val statesCompact: String,
+        val achievedHours: Int,
+        val elapsedHours: Int
+    )
 
     @OptIn(FlowPreview::class)
     override fun onCreate() {
@@ -158,7 +166,16 @@ class StepCounterForegroundService : android.app.Service() {
 
         // Start foreground immediately with a placeholder notification
         try {
-            startForeground(NOTIFICATION_ID, buildNotification(0, 0, isSyncing = true))
+            val initialTimeline = buildTimelinePresentation(
+                now = java.util.Calendar.getInstance(),
+                dayHistory = emptyList(),
+                currentHourSteps = 0,
+                isSyncing = true
+            )
+            startForeground(
+                NOTIFICATION_ID,
+                buildNotification(0, 0, initialTimeline, isSyncing = true)
+            )
         } catch (e: Exception) {
             android.util.Log.e("StepCounterFGSvc", "startForeground failed", e)
             // Can't start foreground (likely disallowed while app is background) — stop to avoid crash
@@ -264,13 +281,21 @@ class StepCounterForegroundService : android.app.Service() {
                 // Get daily total from database (excluding current hour by wall-clock)
                 val dbTotal = repository.getTotalStepsForDayExcludingCurrentHour(startOfDay, wallClockHourTimestamp).first() ?: 0
                 val dailyTotal = dbTotal + currentHourSteps
+                val dayHistory = repository.getStepsForDay(startOfDay, wallClockHourTimestamp).first()
+                val timeline = buildTimelinePresentation(
+                    now = java.util.Calendar.getInstance(),
+                    dayHistory = dayHistory,
+                    currentHourSteps = currentHourSteps,
+                    isSyncing = isSyncing
+                )
 
                 android.util.Log.d("StepCounterFGSvc", "Calculated: dbTotal=$dbTotal, currentHour=$currentHourSteps, daily=$dailyTotal")
                 StepNotificationState(
                     currentHourSteps = currentHourSteps,
                     dailyTotal = dailyTotal,
                     useWakeLock = useWake,
-                    isSyncing = isSyncing
+                    isSyncing = isSyncing,
+                    timeline = timeline
                 )
             }
             .sample(3.seconds)  // THROTTLE: Only emit once every 3 seconds to prevent notification rate limiting
@@ -279,7 +304,12 @@ class StepCounterForegroundService : android.app.Service() {
                 android.util.Log.d("StepCounterFGSvc", "Notification update (throttled 3s): currentHour=${state.currentHourSteps}, daily=${state.dailyTotal}, syncing=${state.isSyncing}")
 
                 // Update notification with correct daily total
-                val notification = buildNotification(state.currentHourSteps, state.dailyTotal, state.isSyncing)
+                val notification = buildNotification(
+                    currentHourSteps = state.currentHourSteps,
+                    totalSteps = state.dailyTotal,
+                    timeline = state.timeline,
+                    isSyncing = state.isSyncing
+                )
                 val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                 nm.notify(NOTIFICATION_ID, notification)
 
@@ -320,13 +350,27 @@ class StepCounterForegroundService : android.app.Service() {
 
     override fun onBind(intent: Intent?): android.os.IBinder? = null
 
-    private fun buildNotification(currentHourSteps: Int, totalSteps: Int, isSyncing: Boolean = false): Notification {
-        val title = if (isSyncing) {
+    private fun buildNotification(
+        currentHourSteps: Int,
+        totalSteps: Int,
+        timeline: TimelinePresentation,
+        isSyncing: Boolean = false
+    ): Notification {
+        val line1 = if (isSyncing) {
             getString(R.string.notification_title_syncing)
         } else {
-            getString(R.string.notification_title_steps, currentHourSteps)
+            getString(
+                R.string.notification_line1_steps_hour_today,
+                currentHourSteps,
+                totalSteps
+            )
         }
-        val text = getString(R.string.notification_text_steps, totalSteps)
+        val line2 = getString(
+            R.string.notification_line2_timeline_with_hits,
+            timeline.statesCompact,
+            timeline.achievedHours,
+            timeline.elapsedHours
+        )
 
         val openAppIntent = Intent(this, com.example.myhourlystepcounterv2.MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -341,8 +385,8 @@ class StepCounterForegroundService : android.app.Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(title)
-            .setContentText(text)
+            .setContentTitle(line1)
+            .setContentText(line2)
             .setOngoing(true)
             .setContentIntent(openAppPending)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -357,8 +401,70 @@ class StepCounterForegroundService : android.app.Service() {
         val currentHourSteps: Int,
         val dailyTotal: Int,
         val useWakeLock: Boolean,
-        val isSyncing: Boolean
+        val isSyncing: Boolean,
+        val timeline: TimelinePresentation
     )
+
+    private fun buildTimelinePresentation(
+        now: java.util.Calendar,
+        dayHistory: List<com.example.myhourlystepcounterv2.data.StepEntity>,
+        currentHourSteps: Int,
+        isSyncing: Boolean
+    ): TimelinePresentation {
+        val goal = StepTrackerConfig.STEP_REMINDER_THRESHOLD
+        val currentHour = now.get(java.util.Calendar.HOUR_OF_DAY)
+        val startOfDayCalendar = now.clone().let { it as java.util.Calendar }.apply {
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        val stepsByTimestamp = dayHistory.associate { it.timestamp to it.stepCount }
+        val states = mutableListOf<String>()
+        var achievedHours = 0
+
+        for (hour in ACTIVE_WINDOW_START_HOUR..ACTIVE_WINDOW_END_HOUR) {
+            val hourTimestamp = (startOfDayCalendar.clone() as java.util.Calendar).apply {
+                set(java.util.Calendar.HOUR_OF_DAY, hour)
+            }.timeInMillis
+            val symbol = when {
+                hour < currentHour -> {
+                    val hit = (stepsByTimestamp[hourTimestamp] ?: 0) >= goal
+                    if (hit) {
+                        achievedHours += 1
+                        "●"
+                    } else {
+                        "○"
+                    }
+                }
+                hour == currentHour -> {
+                    if (isSyncing) {
+                        "…"
+                    } else if (currentHourSteps >= goal) {
+                        achievedHours += 1
+                        "◉"
+                    } else {
+                        "◔"
+                    }
+                }
+                else -> "◌"
+            }
+            states.add(symbol)
+        }
+
+        val elapsedHours = when {
+            currentHour < ACTIVE_WINDOW_START_HOUR -> 0
+            currentHour > ACTIVE_WINDOW_END_HOUR -> ACTIVE_WINDOW_END_HOUR - ACTIVE_WINDOW_START_HOUR + 1
+            else -> currentHour - ACTIVE_WINDOW_START_HOUR + 1
+        }
+
+        return TimelinePresentation(
+            statesExpanded = states.joinToString(" "),
+            statesCompact = states.joinToString(""),
+            achievedHours = achievedHours,
+            elapsedHours = elapsedHours
+        )
+    }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -857,10 +963,17 @@ class StepCounterForegroundService : android.app.Service() {
             // Get daily total from database (excluding current hour by wall-clock)
             val dbTotal = repository.getTotalStepsForDayExcludingCurrentHour(startOfDay, wallClockHourTimestamp).first() ?: 0
             val dailyTotal = dbTotal + currentHourSteps
+            val dayHistory = repository.getStepsForDay(startOfDay, wallClockHourTimestamp).first()
+            val timeline = buildTimelinePresentation(
+                now = java.util.Calendar.getInstance(),
+                dayHistory = dayHistory,
+                currentHourSteps = currentHourSteps,
+                isSyncing = notificationSyncing.value
+            )
 
             android.util.Log.i("StepCounterFGSvc", "Forcing immediate notification update: hour=$currentHourSteps, daily=$dailyTotal")
-            
-            val notification = buildNotification(currentHourSteps, dailyTotal)
+
+            val notification = buildNotification(currentHourSteps, dailyTotal, timeline, notificationSyncing.value)
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.notify(NOTIFICATION_ID, notification)
         } catch (e: Exception) {
