@@ -39,6 +39,7 @@ class StepCounterForegroundService : android.app.Service() {
         const val ACTION_STOP = "com.example.myhourlystepcounterv2.ACTION_STOP_FOREGROUND"
         const val ACTIVE_WINDOW_START_HOUR = 8
         const val ACTIVE_WINDOW_END_HOUR = 22
+        const val MAX_TIMELINE_CIRCLES = 10
 
         // Staleness thresholds for sensor keepalive
         const val FLUSH_THRESHOLD_MS = 60_000L            // 1 min: flush FIFO before reading
@@ -356,18 +357,14 @@ class StepCounterForegroundService : android.app.Service() {
         timeline: TimelinePresentation,
         isSyncing: Boolean = false
     ): Notification {
-        val line1 = if (isSyncing) {
+        val hourlyText = if (isSyncing) {
             getString(R.string.notification_title_syncing)
         } else {
-            getString(
-                R.string.notification_line1_steps_hour_today,
-                currentHourSteps,
-                totalSteps
-            )
+            getString(R.string.notification_title_steps, currentHourSteps)
         }
-        val line2 = getString(
-            R.string.notification_line2_timeline_with_hits,
-            timeline.statesCompact,
+        val dailyText = getString(R.string.notification_text_steps, totalSteps)
+        val hitsText = getString(
+            R.string.notification_hits_summary,
             timeline.achievedHours,
             timeline.elapsedHours
         )
@@ -383,10 +380,17 @@ class StepCounterForegroundService : android.app.Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
+        val customView = android.widget.RemoteViews(packageName, R.layout.notification_persistent).apply {
+            setTextViewText(R.id.notification_hourly, hourlyText)
+            setTextViewText(R.id.notification_daily, dailyText)
+            setTextViewText(R.id.notification_timeline, timeline.statesCompact)
+            setTextViewText(R.id.notification_hits, hitsText)
+        }
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(line1)
-            .setContentText(line2)
+            .setStyle(NotificationCompat.DecoratedCustomViewStyle())
+            .setCustomContentView(customView)
             .setOngoing(true)
             .setContentIntent(openAppPending)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -423,7 +427,11 @@ class StepCounterForegroundService : android.app.Service() {
         val states = mutableListOf<String>()
         var achievedHours = 0
 
-        for (hour in ACTIVE_WINDOW_START_HOUR..ACTIVE_WINDOW_END_HOUR) {
+        // Sliding window: show up to MAX_TIMELINE_CIRCLES, ending at current hour + 1
+        val windowEnd = minOf(currentHour + 1, ACTIVE_WINDOW_END_HOUR)
+        val windowStart = maxOf(windowEnd - MAX_TIMELINE_CIRCLES + 1, ACTIVE_WINDOW_START_HOUR)
+
+        for (hour in windowStart..windowEnd) {
             val hourTimestamp = (startOfDayCalendar.clone() as java.util.Calendar).apply {
                 set(java.util.Calendar.HOUR_OF_DAY, hour)
             }.timeInMillis
@@ -432,22 +440,22 @@ class StepCounterForegroundService : android.app.Service() {
                     val hit = (stepsByTimestamp[hourTimestamp] ?: 0) >= goal
                     if (hit) {
                         achievedHours += 1
-                        "●"
+                        "🟢"
                     } else {
-                        "○"
+                        "🔴"
                     }
                 }
                 hour == currentHour -> {
                     if (isSyncing) {
-                        "…"
+                        "⏳"
                     } else if (currentHourSteps >= goal) {
                         achievedHours += 1
-                        "◉"
+                        "🟢"
                     } else {
-                        "◔"
+                        "🟡"
                     }
                 }
-                else -> "◌"
+                else -> "⚪"
             }
             states.add(symbol)
         }
@@ -455,7 +463,7 @@ class StepCounterForegroundService : android.app.Service() {
         val elapsedHours = when {
             currentHour < ACTIVE_WINDOW_START_HOUR -> 0
             currentHour > ACTIVE_WINDOW_END_HOUR -> ACTIVE_WINDOW_END_HOUR - ACTIVE_WINDOW_START_HOUR + 1
-            else -> currentHour - ACTIVE_WINDOW_START_HOUR + 1
+            else -> currentHour - windowStart + 1
         }
 
         return TimelinePresentation(

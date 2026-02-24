@@ -11,6 +11,7 @@
     <string name="notification_title_steps">👣 %1$d steps this hour</string>
     <string name="notification_line1_steps_hour_today">👣 %1$d this hour • 📅 %2$d today</string>
     <string name="notification_line2_timeline_with_hits">%1$s • 🎯 %2$d/%3$d hit</string>
+    <string name="notification_hits_summary">🎯 %1$d/%2$d hit</string>
     <string name="notification_title_syncing">👣 syncing…</string>
     <string name="notification_action_stop">Stop</string>
     <string name="syncing_label">syncing…</string>
