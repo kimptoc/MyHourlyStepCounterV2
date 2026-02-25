@@ -442,7 +442,7 @@ class StepCounterForegroundService : android.app.Service() {
                         achievedHours += 1
                         "🟢"
                     } else {
-                        "🔴"
+                        "❌"
                     }
                 }
                 hour == currentHour -> {
