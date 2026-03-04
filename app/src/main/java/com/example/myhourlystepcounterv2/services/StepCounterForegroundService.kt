@@ -859,16 +859,37 @@ class StepCounterForegroundService : android.app.Service() {
                 fallbackTotal
             }
 
-            // Calculate steps in the PREVIOUS hour (that just ended)
-            var stepsInPreviousHour = deviceTotal - previousHourStartStepCount
+            // Check for reboot or counter discontinuity before computing delta
+            val savedBootCount = preferences.lastKnownBootCount.first()
+            val currentBootCount = getCurrentBootCount()
+            val rebootDetected = isDeviceRebootDetected(currentBootCount, savedBootCount)
+            val continuityBroken = shouldBreakCounterContinuity(
+                currentDeviceTotal = deviceTotal,
+                savedDeviceTotal = previousHourStartStepCount,
+                rebootDetected = rebootDetected
+            )
 
-            // Validate and clamp the value
-            if (stepsInPreviousHour < 0) {
-                android.util.Log.w("StepCounterFGSvc", "Negative step delta ($stepsInPreviousHour). Clamping to 0.")
+            // Calculate steps in the PREVIOUS hour (that just ended)
+            var stepsInPreviousHour: Int
+            if (continuityBroken) {
+                android.util.Log.w(
+                    "StepCounterFGSvc",
+                    "handleHourBoundary: Counter continuity broken " +
+                            "(device=$deviceTotal, baseline=$previousHourStartStepCount, reboot=$rebootDetected). " +
+                            "Saving 0 for previous hour."
+                )
                 stepsInPreviousHour = 0
-            } else if (stepsInPreviousHour > StepTrackerConfig.MAX_STEPS_PER_HOUR) {
-                android.util.Log.w("StepCounterFGSvc", "Unreasonable step delta ($stepsInPreviousHour). Clamping to ${StepTrackerConfig.MAX_STEPS_PER_HOUR}.")
-                stepsInPreviousHour = StepTrackerConfig.MAX_STEPS_PER_HOUR
+            } else {
+                stepsInPreviousHour = deviceTotal - previousHourStartStepCount
+
+                // Validate and clamp the value
+                if (stepsInPreviousHour < 0) {
+                    android.util.Log.w("StepCounterFGSvc", "Negative step delta ($stepsInPreviousHour). Clamping to 0.")
+                    stepsInPreviousHour = 0
+                } else if (stepsInPreviousHour > StepTrackerConfig.MAX_STEPS_PER_HOUR) {
+                    android.util.Log.w("StepCounterFGSvc", "Unreasonable step delta ($stepsInPreviousHour). Clamping to ${StepTrackerConfig.MAX_STEPS_PER_HOUR}.")
+                    stepsInPreviousHour = StepTrackerConfig.MAX_STEPS_PER_HOUR
+                }
             }
 
             // Mark as processed BEFORE async operations to prevent races
@@ -898,11 +919,10 @@ class StepCounterForegroundService : android.app.Service() {
                 val resetSuccessful = sensorManager.resetForNewHour(deviceTotal)
 
                 if (!resetSuccessful) {
-                    android.util.Log.w("StepCounterFGSvc", "Baseline already set, skipping duplicate reset")
-                    return
+                    android.util.Log.w("StepCounterFGSvc", "Baseline already set in sensor, but still saving preferences")
                 }
 
-                // Update preferences with new hour baseline
+                // Update preferences with new hour baseline (always, even on duplicate sensor reset)
                 preferences.saveHourData(
                     hourStartStepCount = deviceTotal,
                     currentTimestamp = currentHourTimestamp,
