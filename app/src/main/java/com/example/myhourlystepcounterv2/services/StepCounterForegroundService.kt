@@ -427,8 +427,13 @@ class StepCounterForegroundService : android.app.Service() {
         val states = mutableListOf<String>()
         var achievedHours = 0
 
-        // Sliding window: show up to MAX_TIMELINE_CIRCLES, ending at current hour + 1
-        val windowEnd = minOf(currentHour + 1, ACTIVE_WINDOW_END_HOUR)
+        // Sliding window: show up to MAX_TIMELINE_CIRCLES, ending at current hour + 1.
+        // Lookahead (+1) only applies while there are still hours left inside the window;
+        // once we reach the last active hour (ACTIVE_WINDOW_END_HOUR) it shows as current, not preview.
+        val windowEnd = when {
+            currentHour >= ACTIVE_WINDOW_END_HOUR -> ACTIVE_WINDOW_END_HOUR
+            else -> minOf(currentHour + 1, ACTIVE_WINDOW_END_HOUR - 1)
+        }
         val windowStart = maxOf(windowEnd - MAX_TIMELINE_CIRCLES + 1, ACTIVE_WINDOW_START_HOUR)
 
         for (hour in windowStart..windowEnd) {
