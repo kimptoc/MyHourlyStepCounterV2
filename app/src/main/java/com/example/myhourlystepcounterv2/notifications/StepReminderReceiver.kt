@@ -35,13 +35,13 @@ class StepReminderReceiver : BroadcastReceiver() {
 
                 // Check if current time is within allowed window (8am to 10pm)
                 val currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-                if (currentHour < 8 || currentHour >= 23) { // 8am to 10pm (23:00)
+                if (currentHour < 8 || currentHour >= 22) { // 8am to 10pm (22:00)
                     android.util.Log.d("StepReminder", "$reminderType: Outside allowed time window (8am-10pm), skipping")
-                    // Still reschedule for next hour to continue the cycle
+                    // Schedule directly for 08:50/08:55 to avoid waking up every hour overnight
                     if (isSecondReminder) {
-                        AlarmScheduler.scheduleSecondStepReminder(context.applicationContext)
+                        AlarmScheduler.scheduleSecondStepReminderNextWindow(context.applicationContext)
                     } else {
-                        AlarmScheduler.scheduleStepReminders(context.applicationContext)
+                        AlarmScheduler.scheduleStepRemindersNextWindow(context.applicationContext)
                     }
                     return@launch
                 }

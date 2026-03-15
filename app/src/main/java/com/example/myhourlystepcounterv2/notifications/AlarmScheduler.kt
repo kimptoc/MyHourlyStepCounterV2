@@ -155,6 +155,73 @@ object AlarmScheduler {
     }
 
     /**
+     * Schedule step reminder for the next in-window time (08:50).
+     * Used when currently outside the 8am–10pm quiet hours window to avoid
+     * waking the device every hour overnight.
+     */
+    fun scheduleStepRemindersNextWindow(context: Context, skipPermissionCheck: Boolean = false) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        if (!skipPermissionCheck && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (!alarmManager.canScheduleExactAlarms()) {
+                android.util.Log.w("AlarmScheduler", "Cannot schedule exact alarms - permission not granted")
+                return
+            }
+        }
+
+        val intent = Intent(context, StepReminderReceiver::class.java).apply {
+            action = StepReminderReceiver.ACTION_STEP_REMINDER
+        }
+        val pendingIntent = PendingIntent.getBroadcast(
+            context, REQUEST_CODE_REMINDER, intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        // Next day if after 10pm; same day if before 8am
+        val calendar = Calendar.getInstance().apply {
+            if (get(Calendar.HOUR_OF_DAY) >= 22) add(Calendar.DAY_OF_YEAR, 1)
+            set(Calendar.HOUR_OF_DAY, 8)
+            set(Calendar.MINUTE, 50)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pendingIntent)
+        android.util.Log.i("AlarmScheduler", "Step reminder scheduled (next window) at ${calendar.time}")
+    }
+
+    /**
+     * Schedule second step reminder for the next in-window time (08:55).
+     * Used when currently outside the 8am–10pm quiet hours window.
+     */
+    fun scheduleSecondStepReminderNextWindow(context: Context, skipPermissionCheck: Boolean = false) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        if (!skipPermissionCheck && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (!alarmManager.canScheduleExactAlarms()) {
+                android.util.Log.w("AlarmScheduler", "Cannot schedule exact alarms - permission not granted")
+                return
+            }
+        }
+
+        val intent = Intent(context, StepReminderReceiver::class.java).apply {
+            action = StepReminderReceiver.ACTION_SECOND_STEP_REMINDER
+        }
+        val pendingIntent = PendingIntent.getBroadcast(
+            context, REQUEST_CODE_SECOND_REMINDER, intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        // Next day if after 10pm; same day if before 8am
+        val calendar = Calendar.getInstance().apply {
+            if (get(Calendar.HOUR_OF_DAY) >= 22) add(Calendar.DAY_OF_YEAR, 1)
+            set(Calendar.HOUR_OF_DAY, 8)
+            set(Calendar.MINUTE, 55)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pendingIntent)
+        android.util.Log.i("AlarmScheduler", "Second step reminder scheduled (next window) at ${calendar.time}")
+    }
+
+    /**
      * Cancel scheduled second step reminder
      */
     fun cancelSecondStepReminder(context: Context) {
