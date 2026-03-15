@@ -244,6 +244,34 @@ class AlarmSchedulerTest {
     }
 
     @Test
+    fun testScheduleStepRemindersNextWindow_schedulesAt0850() {
+        // When
+        AlarmScheduler.scheduleStepRemindersNextWindow(context, skipPermissionCheck = true)
+
+        // Then - always targets 08:50 (today if before 8am, tomorrow if after 10pm)
+        val alarm = shadowAlarmManager.scheduledAlarms.first()
+        assertEquals(AlarmManager.RTC_WAKEUP, alarm.getType())
+        val scheduled = Calendar.getInstance().apply { timeInMillis = alarm.triggerAtMs }
+        assertEquals(8, scheduled.get(Calendar.HOUR_OF_DAY))
+        assertEquals(50, scheduled.get(Calendar.MINUTE))
+        assertEquals(0, scheduled.get(Calendar.SECOND))
+    }
+
+    @Test
+    fun testScheduleSecondStepReminderNextWindow_schedulesAt0855() {
+        // When
+        AlarmScheduler.scheduleSecondStepReminderNextWindow(context, skipPermissionCheck = true)
+
+        // Then - always targets 08:55 (today if before 8am, tomorrow if after 10pm)
+        val alarm = shadowAlarmManager.scheduledAlarms.first()
+        assertEquals(AlarmManager.RTC_WAKEUP, alarm.getType())
+        val scheduled = Calendar.getInstance().apply { timeInMillis = alarm.triggerAtMs }
+        assertEquals(8, scheduled.get(Calendar.HOUR_OF_DAY))
+        assertEquals(55, scheduled.get(Calendar.MINUTE))
+        assertEquals(0, scheduled.get(Calendar.SECOND))
+    }
+
+    @Test
     fun testBoundaryCheckAlarm_usesExactAndAllowWhileIdle() {
         // When
         AlarmScheduler.scheduleBoundaryCheckAlarm(context, skipPermissionCheck = true)
