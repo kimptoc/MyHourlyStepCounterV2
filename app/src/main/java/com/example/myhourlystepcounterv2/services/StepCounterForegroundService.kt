@@ -431,6 +431,7 @@ class StepCounterForegroundService : android.app.Service() {
         // Lookahead (+1) only applies while there are still hours left inside the window;
         // once we reach the last active hour (ACTIVE_WINDOW_END_HOUR) it shows as current, not preview.
         val windowEnd = when {
+            currentHour < ACTIVE_WINDOW_START_HOUR -> ACTIVE_WINDOW_START_HOUR - 1  // empty range → no circles
             currentHour >= ACTIVE_WINDOW_END_HOUR -> ACTIVE_WINDOW_END_HOUR
             else -> minOf(currentHour + 1, ACTIVE_WINDOW_END_HOUR - 1)
         }
