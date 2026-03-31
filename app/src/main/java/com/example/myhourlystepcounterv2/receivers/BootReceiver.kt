@@ -16,49 +16,65 @@ class BootReceiver(
     private val dispatcher: CoroutineDispatcher? = null
 ) : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        val pendingResult = goAsync()
         if (stepPreferences == null) {
             stepPreferences = StepPreferences(context.applicationContext)
         }
         val action = intent.action
-        if (action == Intent.ACTION_BOOT_COMPLETED || action == Intent.ACTION_LOCKED_BOOT_COMPLETED) {
+        if (
+            action == Intent.ACTION_BOOT_COMPLETED ||
+            action == Intent.ACTION_LOCKED_BOOT_COMPLETED ||
+            action == Intent.ACTION_MY_PACKAGE_REPLACED
+        ) {
             // Launch a short coroutine to check the preference and start service if enabled
             CoroutineScope(dispatcher ?: Dispatchers.Default).launch {
-                val prefs = stepPreferences ?: StepPreferences(context.applicationContext)
-                val enabled = prefs.permanentNotificationEnabled.first()
-                if (enabled) {
-                    val svcIntent = Intent(context.applicationContext, com.example.myhourlystepcounterv2.services.StepCounterForegroundService::class.java)
-                    try {
-                        context.startForegroundService(svcIntent)
-                    } catch (e: Exception) {
-                        // Best-effort: ignore if the system prevents starting a service here
-                        android.util.Log.w("BootReceiver", "Failed to start foreground service on boot: ${e.message}")
-                    }
-
-                    // Also schedule step reminders if enabled (both first and second)
+                try {
+                    val prefs = stepPreferences ?: StepPreferences(context.applicationContext)
+                    val permanentNotificationEnabled = prefs.permanentNotificationEnabled.first()
                     val reminderEnabled = prefs.reminderNotificationEnabled.first()
+                    // Always bypass exact alarm permission check in boot/update recovery —
+                    // we're already inside the if-block that guarantees a system restart action.
                     if (reminderEnabled) {
                         com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleStepReminders(
-                            context.applicationContext
+                            context.applicationContext,
+                            skipPermissionCheck = true
                         )
                         com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleSecondStepReminder(
-                            context.applicationContext
+                            context.applicationContext,
+                            skipPermissionCheck = true
                         )
-                        android.util.Log.d("BootReceiver", "Step reminders scheduled on boot (XX:50 and XX:55)")
+                        android.util.Log.d("BootReceiver", "Step reminders scheduled after restart/update (XX:50 and XX:55)")
                     }
 
-                    // Always schedule hour boundary alarms for notification resets
                     com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleHourBoundaryAlarms(
-                        context.applicationContext
+                        context.applicationContext,
+                        skipPermissionCheck = true
                     )
-                    android.util.Log.d("BootReceiver", "Hour boundary alarms scheduled on boot")
+                    android.util.Log.d("BootReceiver", "Hour boundary alarms scheduled after restart/update")
 
-                    // Schedule periodic boundary check alarm (every 15 minutes backup)
                     com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleBoundaryCheckAlarm(
-                        context.applicationContext
+                        context.applicationContext,
+                        skipPermissionCheck = true
                     )
-                    android.util.Log.d("BootReceiver", "Boundary check alarm scheduled on boot")
+                    android.util.Log.d("BootReceiver", "Boundary check alarm scheduled after restart/update")
+
+                    if (permanentNotificationEnabled) {
+                        val svcIntent = Intent(context.applicationContext, com.example.myhourlystepcounterv2.services.StepCounterForegroundService::class.java)
+                        try {
+                            context.startForegroundService(svcIntent)
+                        } catch (e: Exception) {
+                            // Best-effort: ignore if the system prevents starting a service here
+                            android.util.Log.w("BootReceiver", "Failed to start foreground service after restart/update: ${e.message}")
+                        }
+                    } else {
+                        android.util.Log.i("BootReceiver", "Permanent notification disabled; alarms restored without starting service")
+                    }
+                } finally {
+                    pendingResult?.finish()
                 }
             }
+        } else {
+            pendingResult?.finish()
         }
     }
 }
