@@ -32,31 +32,29 @@ class BootReceiver(
                     val prefs = stepPreferences ?: StepPreferences(context.applicationContext)
                     val permanentNotificationEnabled = prefs.permanentNotificationEnabled.first()
                     val reminderEnabled = prefs.reminderNotificationEnabled.first()
-                    val allowExactAlarmBypass = action == Intent.ACTION_BOOT_COMPLETED ||
-                        action == Intent.ACTION_LOCKED_BOOT_COMPLETED ||
-                        action == Intent.ACTION_MY_PACKAGE_REPLACED
-
+                    // Always bypass exact alarm permission check in boot/update recovery —
+                    // we're already inside the if-block that guarantees a system restart action.
                     if (reminderEnabled) {
                         com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleStepReminders(
                             context.applicationContext,
-                            skipPermissionCheck = allowExactAlarmBypass
+                            skipPermissionCheck = true
                         )
                         com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleSecondStepReminder(
                             context.applicationContext,
-                            skipPermissionCheck = allowExactAlarmBypass
+                            skipPermissionCheck = true
                         )
                         android.util.Log.d("BootReceiver", "Step reminders scheduled after restart/update (XX:50 and XX:55)")
                     }
 
                     com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleHourBoundaryAlarms(
                         context.applicationContext,
-                        skipPermissionCheck = allowExactAlarmBypass
+                        skipPermissionCheck = true
                     )
                     android.util.Log.d("BootReceiver", "Hour boundary alarms scheduled after restart/update")
 
                     com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleBoundaryCheckAlarm(
                         context.applicationContext,
-                        skipPermissionCheck = allowExactAlarmBypass
+                        skipPermissionCheck = true
                     )
                     android.util.Log.d("BootReceiver", "Boundary check alarm scheduled after restart/update")
 
@@ -72,11 +70,11 @@ class BootReceiver(
                         android.util.Log.i("BootReceiver", "Permanent notification disabled; alarms restored without starting service")
                     }
                 } finally {
-                    pendingResult.finish()
+                    pendingResult?.finish()
                 }
             }
         } else {
-            pendingResult.finish()
+            pendingResult?.finish()
         }
     }
 }
