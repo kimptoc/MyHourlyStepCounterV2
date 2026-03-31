@@ -73,11 +73,26 @@ class BootReceiverTest {
         // Given
         val intent = Intent(Intent.ACTION_BOOT_COMPLETED)
         whenever(mockPreferences.permanentNotificationEnabled).thenReturn(flowOf(false))
+        whenever(mockPreferences.reminderNotificationEnabled).thenReturn(flowOf(false))
 
         // When
         receiver.onReceive(context, intent)
         testDispatcher.scheduler.advanceUntilIdle()
 
         // Then - should not crash and should skip service start
+    }
+
+    @Test
+    fun onReceive_withPackageReplaced_doesNotCrash() = runTest(testDispatcher) {
+        // Given
+        val intent = Intent(Intent.ACTION_MY_PACKAGE_REPLACED)
+        whenever(mockPreferences.permanentNotificationEnabled).thenReturn(flowOf(true))
+        whenever(mockPreferences.reminderNotificationEnabled).thenReturn(flowOf(true))
+
+        // When
+        receiver.onReceive(context, intent)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // Then - should not crash during app update restart flow
     }
 }
