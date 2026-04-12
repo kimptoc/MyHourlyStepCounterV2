@@ -15,6 +15,7 @@ import com.example.myhourlystepcounterv2.ui.MyHourlyStepCounterV2App
 import com.example.myhourlystepcounterv2.ui.StepCounterViewModel
 import com.example.myhourlystepcounterv2.ui.StepCounterViewModelFactory
 import com.example.myhourlystepcounterv2.ui.theme.MyHourlyStepCounterV2Theme
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -49,7 +50,7 @@ class MainActivity : ComponentActivity() {
         // This runs once in Activity lifecycle, not on every ViewModel initialization
         val preferences = StepPreferences(applicationContext)
         lifecycleScope.launch {
-            preferences.permanentNotificationEnabled.collect { enabled ->
+            preferences.permanentNotificationEnabled.distinctUntilChanged().collect { enabled ->
                 val svcIntent = Intent(applicationContext, StepCounterForegroundService::class.java)
                 if (enabled) {
                     // Start foreground service (app is in foreground so this is allowed)
@@ -68,7 +69,7 @@ class MainActivity : ComponentActivity() {
 
         // Schedule step reminder alarms (both first and second reminders)
         lifecycleScope.launch {
-            preferences.reminderNotificationEnabled.collect { enabled ->
+            preferences.reminderNotificationEnabled.distinctUntilChanged().collect { enabled ->
                 if (enabled) {
                     com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleStepReminders(
                         applicationContext
