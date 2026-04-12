@@ -99,6 +99,39 @@ class StepCounterForegroundService : android.app.Service() {
             return currentSyncing && lastSensorEventTimeMs > 0L
         }
 
+        /**
+         * Staleness threshold for checkpoint-driven notification updates.
+         * When the last sensor event is older than this, the checkpoint loop
+         * will feed its reading back to the notification pipeline.
+         */
+        const val STALE_SENSOR_THRESHOLD_MS = 30_000L
+
+        /**
+         * Determines whether the checkpoint loop should update the notification
+         * pipeline with its own sensor reading. This is needed because
+         * onSensorChanged() may not fire during doze/screen-off, leaving the
+         * notification stuck at 0 after reboot.
+         *
+         * @param isInitialized whether the sensor state has been initialized
+         * @param sensorAgeMs  how long since the last onSensorChanged() callback
+         * @param currentTotal the device-total step count read by the checkpoint
+         * @param hourBaseline the step count at the start of the current hour
+         * @param displayedSteps the value currently shown in the notification
+         * @return true if the checkpoint should push its reading to the notification
+         */
+        fun shouldCheckpointUpdateNotification(
+            isInitialized: Boolean,
+            sensorAgeMs: Long,
+            currentTotal: Int,
+            hourBaseline: Int,
+            displayedSteps: Int
+        ): Boolean {
+            if (!isInitialized) return false
+            if (sensorAgeMs <= STALE_SENSOR_THRESHOLD_MS) return false
+            val estimatedHourSteps = currentTotal - hourBaseline
+            return estimatedHourSteps > displayedSteps && estimatedHourSteps >= 0
+        }
+
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -239,6 +272,27 @@ class StepCounterForegroundService : android.app.Service() {
                 if (currentTotal > 0) {
                     preferences.saveDeviceTotalSnapshot(System.currentTimeMillis(), currentTotal)
                     saveCurrentHourCheckpoint(currentTotal)
+
+                    // Feed checkpoint data back to notification pipeline when sensor events are stale.
+                    // Without this, the notification shows 0 after reboot until the app is opened,
+                    // because onSensorChanged() isn't called during doze/screen-off.
+                    val sensorAge = System.currentTimeMillis() - sensorManager.getLastSensorEventTime()
+                    if (shouldCheckpointUpdateNotification(
+                            isInitialized = sensorManager.sensorState.value.isInitialized,
+                            sensorAgeMs = sensorAge,
+                            currentTotal = currentTotal,
+                            hourBaseline = sensorManager.sensorState.value.lastHourStartStepCount,
+                            displayedSteps = sensorManager.currentStepCount.value
+                        )
+                    ) {
+                        android.util.Log.i(
+                            "StepCounterFGSvc",
+                            "Checkpoint: Updating stale notification from ${sensorManager.currentStepCount.value} to " +
+                                "${currentTotal - sensorManager.sensorState.value.lastHourStartStepCount} steps " +
+                                "(sensor ${sensorAge / 1000}s old)"
+                        )
+                        sensorManager.setLastKnownStepCount(currentTotal)
+                    }
                 }
 
                 delay(CHECKPOINT_INTERVAL_MINUTES.minutes)

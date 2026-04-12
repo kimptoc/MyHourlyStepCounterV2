@@ -8,8 +8,11 @@ import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.C
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.isDeviceRebootDetected
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.shouldBreakCounterContinuity
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.shouldClearNotificationSyncState
+import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.shouldCheckpointUpdateNotification
+import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.STALE_SENSOR_THRESHOLD_MS
 import com.example.myhourlystepcounterv2.resolveKnownTotalForInitialization
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -206,5 +209,118 @@ class InitializationSeedResolutionTest {
             hasFreshSensorEvent = false
         )
         assertEquals(437, knownTotal)
+    }
+}
+
+class CheckpointNotificationUpdateTest {
+
+    @Test
+    fun shouldUpdate_whenSensorStaleAndEstimateExceedsDisplayed() {
+        assertTrue(
+            shouldCheckpointUpdateNotification(
+                isInitialized = true,
+                sensorAgeMs = 60_000L,          // 1 minute, well above 30s threshold
+                currentTotal = 5100,
+                hourBaseline = 5000,
+                displayedSteps = 0              // notification stuck at 0
+            )
+        )
+    }
+
+    @Test
+    fun shouldNotUpdate_whenSensorIsFresh() {
+        // Sensor event arrived 10s ago — onSensorChanged is delivering fine
+        assertFalse(
+            shouldCheckpointUpdateNotification(
+                isInitialized = true,
+                sensorAgeMs = 10_000L,
+                currentTotal = 5100,
+                hourBaseline = 5000,
+                displayedSteps = 0
+            )
+        )
+    }
+
+    @Test
+    fun shouldNotUpdate_whenNotInitialized() {
+        assertFalse(
+            shouldCheckpointUpdateNotification(
+                isInitialized = false,
+                sensorAgeMs = 60_000L,
+                currentTotal = 5100,
+                hourBaseline = 5000,
+                displayedSteps = 0
+            )
+        )
+    }
+
+    @Test
+    fun shouldNotUpdate_whenDisplayAlreadyHigherThanEstimate() {
+        // Notification already shows 200, estimate is only 100
+        assertFalse(
+            shouldCheckpointUpdateNotification(
+                isInitialized = true,
+                sensorAgeMs = 60_000L,
+                currentTotal = 5100,
+                hourBaseline = 5000,
+                displayedSteps = 200
+            )
+        )
+    }
+
+    @Test
+    fun shouldNotUpdate_whenEstimateEqualsDisplayed() {
+        // Must be strictly greater to trigger update
+        assertFalse(
+            shouldCheckpointUpdateNotification(
+                isInitialized = true,
+                sensorAgeMs = 60_000L,
+                currentTotal = 5100,
+                hourBaseline = 5000,
+                displayedSteps = 100
+            )
+        )
+    }
+
+    @Test
+    fun shouldNotUpdate_whenEstimateIsNegative() {
+        // hourBaseline > currentTotal (e.g., sensor reset)
+        assertFalse(
+            shouldCheckpointUpdateNotification(
+                isInitialized = true,
+                sensorAgeMs = 60_000L,
+                currentTotal = 4900,
+                hourBaseline = 5000,
+                displayedSteps = 0
+            )
+        )
+    }
+
+    @Test
+    fun shouldUpdate_atExactStalenessThresholdPlusOne() {
+        // Just above the 30s threshold
+        assertTrue(
+            shouldCheckpointUpdateNotification(
+                isInitialized = true,
+                sensorAgeMs = STALE_SENSOR_THRESHOLD_MS + 1,
+                currentTotal = 5050,
+                hourBaseline = 5000,
+                displayedSteps = 0
+            )
+        )
+    }
+
+    @Test
+    fun shouldNotUpdate_atExactStalenessThreshold() {
+        // Exactly at the threshold — condition is > not >=
+        assertFalse(
+            shouldCheckpointUpdateNotification(
+                isInitialized = true,
+                sensorAgeMs = STALE_SENSOR_THRESHOLD_MS,
+                currentTotal = 5050,
+                hourBaseline = 5000,
+                displayedSteps = 0
+            )
+        )
     }
 }
