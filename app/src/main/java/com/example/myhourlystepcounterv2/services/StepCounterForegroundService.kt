@@ -129,7 +129,7 @@ class StepCounterForegroundService : android.app.Service() {
             if (!isInitialized) return false
             if (sensorAgeMs <= STALE_SENSOR_THRESHOLD_MS) return false
             val estimatedHourSteps = currentTotal - hourBaseline
-            return estimatedHourSteps > displayedSteps && estimatedHourSteps >= 0
+            return estimatedHourSteps >= 0 && estimatedHourSteps > displayedSteps
         }
 
     }
@@ -276,10 +276,10 @@ class StepCounterForegroundService : android.app.Service() {
                     // Feed checkpoint data back to notification pipeline when sensor events are stale.
                     // Without this, the notification shows 0 after reboot until the app is opened,
                     // because onSensorChanged() isn't called during doze/screen-off.
-                    val sensorAge = System.currentTimeMillis() - sensorManager.getLastSensorEventTime()
+                    val checkpointSensorAge = System.currentTimeMillis() - sensorManager.getLastSensorEventTime()
                     if (shouldCheckpointUpdateNotification(
                             isInitialized = sensorManager.sensorState.value.isInitialized,
-                            sensorAgeMs = sensorAge,
+                            sensorAgeMs = checkpointSensorAge,
                             currentTotal = currentTotal,
                             hourBaseline = sensorManager.sensorState.value.lastHourStartStepCount,
                             displayedSteps = sensorManager.currentStepCount.value
@@ -289,7 +289,7 @@ class StepCounterForegroundService : android.app.Service() {
                             "StepCounterFGSvc",
                             "Checkpoint: Updating stale notification from ${sensorManager.currentStepCount.value} to " +
                                 "${currentTotal - sensorManager.sensorState.value.lastHourStartStepCount} steps " +
-                                "(sensor ${sensorAge / 1000}s old)"
+                                "(sensor ${checkpointSensorAge / 1000}s old)"
                         )
                         sensorManager.setLastKnownStepCount(currentTotal)
                     }
