@@ -15,6 +15,9 @@ interface StepDao {
     @Query("SELECT * FROM hourly_steps WHERE timestamp = :timestamp")
     suspend fun getStepForHour(timestamp: Long): StepEntity?
 
+    @Query("SELECT stepCount FROM hourly_steps WHERE timestamp = :timestamp")
+    fun getStepCountForHour(timestamp: Long): Flow<Int?>
+
     @Query("SELECT * FROM hourly_steps WHERE timestamp >= :startOfDay AND timestamp < :currentHourTimestamp ORDER BY timestamp DESC")
     fun getStepsForDay(startOfDay: Long, currentHourTimestamp: Long): Flow<List<StepEntity>>
 

@@ -8,7 +8,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
+import com.example.myhourlystepcounterv2.data.StepDatabase
 import com.example.myhourlystepcounterv2.data.StepPreferences
+import com.example.myhourlystepcounterv2.data.StepRepository
 import com.example.myhourlystepcounterv2.sensor.StepSensorManager
 import com.example.myhourlystepcounterv2.StepTrackerConfig
 import java.util.Calendar
@@ -31,6 +33,9 @@ class StepReminderReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.Default + SupervisorJob()).launch {
             try {
                 val preferences = StepPreferences(context.applicationContext)
+                val repository = StepRepository(
+                    StepDatabase.getDatabase(context.applicationContext).stepDao()
+                )
                 val reminderType = if (isSecondReminder) "Second (XX:55)" else "First (XX:50)"
 
                 // Check if current time is within allowed window (8am to 10pm)
@@ -61,10 +66,10 @@ class StepReminderReceiver : BroadcastReceiver() {
 
                 if (isSecondReminder) {
                     // Second reminder (XX:55) logic
-                    handleSecondReminderLogic(context.applicationContext, preferences)
+                    handleSecondReminderLogic(context.applicationContext, preferences, repository)
                 } else {
                     // First reminder (XX:50) logic
-                    handleFirstReminderLogic(context.applicationContext, preferences)
+                    handleFirstReminderLogic(context.applicationContext, preferences, repository)
                 }
             } catch (e: Exception) {
                 android.util.Log.e("StepReminder", "Error in reminder receiver", e)
@@ -74,7 +79,11 @@ class StepReminderReceiver : BroadcastReceiver() {
         }
     }
 
-    private suspend fun handleFirstReminderLogic(context: Context, preferences: StepPreferences) {
+    private suspend fun handleFirstReminderLogic(
+        context: Context,
+        preferences: StepPreferences,
+        repository: StepRepository
+    ) {
         // Check if we already sent notification this hour
         val lastNotificationTime = preferences.lastReminderNotificationTime.first()
         val currentHourStart = getCurrentHourStart()
@@ -92,8 +101,7 @@ class StepReminderReceiver : BroadcastReceiver() {
         // Get current hourly step count from shared singleton sensor
         val sensorManager = StepSensorManager.getInstance(context)
 
-        // Read current step count from singleton (already initialized by ViewModel)
-        val currentHourSteps = sensorManager.currentStepCount.first()
+        val currentHourSteps = getDisplayedCurrentHourSteps(repository, sensorManager, currentHourStart)
 
         android.util.Log.d(
             "StepReminder",
@@ -127,7 +135,11 @@ class StepReminderReceiver : BroadcastReceiver() {
         android.util.Log.d("StepReminder", "First: Rescheduled next alarm for 1 hour from now")
     }
 
-    private suspend fun handleSecondReminderLogic(context: Context, preferences: StepPreferences) {
+    private suspend fun handleSecondReminderLogic(
+        context: Context,
+        preferences: StepPreferences,
+        repository: StepRepository
+    ) {
         // Check if we already sent second reminder this hour
         val lastSecondReminderTime = preferences.lastSecondReminderTime.first()
         val currentHourStart = getCurrentHourStart()
@@ -142,8 +154,7 @@ class StepReminderReceiver : BroadcastReceiver() {
         // Get current hourly step count from shared singleton sensor
         val sensorManager = StepSensorManager.getInstance(context)
 
-        // Read current step count from singleton (already initialized by ViewModel)
-        val currentHourSteps = sensorManager.currentStepCount.first()
+        val currentHourSteps = getDisplayedCurrentHourSteps(repository, sensorManager, currentHourStart)
 
         android.util.Log.d(
             "StepReminder",
@@ -183,5 +194,23 @@ class StepReminderReceiver : BroadcastReceiver() {
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }.timeInMillis
+    }
+
+    private suspend fun getDisplayedCurrentHourSteps(
+        repository: StepRepository,
+        sensorManager: StepSensorManager,
+        currentHourStart: Long
+    ): Int {
+        val sensorSteps = sensorManager.currentStepCount.first()
+        val checkpointSteps = repository.getStepForHour(currentHourStart)?.stepCount ?: 0
+        val displayedSteps = maxOf(sensorSteps, checkpointSteps)
+        if (displayedSteps != sensorSteps) {
+            android.util.Log.w(
+                "StepReminder",
+                "Current hour checkpoint is ahead of live sensor: sensor=$sensorSteps, " +
+                        "checkpoint=$checkpointSteps. Using checkpointed value."
+            )
+        }
+        return displayedSteps
     }
 }

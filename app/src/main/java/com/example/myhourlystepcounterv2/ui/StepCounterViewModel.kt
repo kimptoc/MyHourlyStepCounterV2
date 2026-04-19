@@ -241,7 +241,6 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
         // Observe sensor step count
         viewModelScope.launch {
             sensorManager.currentStepCount.collect { steps ->
-                _hourlySteps.value = steps
                 val lastEventTime = sensorManager.getLastSensorEventTime()
 
                 if (shouldStopSyncingFromCallback(_isSyncing.value, syncProbeStartMs, lastEventTime)) {
@@ -270,12 +269,38 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
             }
         }
 
+        // Observe current-hour display from live sensor plus the Room checkpoint.
+        viewModelScope.launch {
+            val currentHourCheckpointSteps = preferences.currentHourTimestamp
+                .flatMapLatest { currentHourTimestamp ->
+                    repository.getStepCountForHour(currentHourTimestamp)
+                }
+
+            combine(
+                sensorManager.currentStepCount,
+                currentHourCheckpointSteps
+            ) { sensorSteps, checkpointSteps ->
+                val checkpoint = checkpointSteps ?: 0
+                val displayedSteps = maxOf(sensorSteps, checkpoint)
+                if (displayedSteps != sensorSteps) {
+                    android.util.Log.w(
+                        "StepCounter",
+                        "Current hour checkpoint is ahead of live sensor: sensor=$sensorSteps, " +
+                                "checkpoint=$checkpoint. Displaying checkpointed value."
+                    )
+                }
+                displayedSteps
+            }.collect { displayedSteps ->
+                _hourlySteps.value = displayedSteps
+            }
+        }
+
         // Observe daily steps (database + current hour)
         viewModelScope.launch {
             combine(
                 preferences.lastStartOfDay,
                 preferences.currentHourTimestamp,
-                sensorManager.currentStepCount
+                _hourlySteps
             ) { storedStartOfDay, currentHourTimestamp, currentHourSteps ->
                 val effectiveStartOfDay = if (storedStartOfDay > 0) storedStartOfDay else getStartOfDay()
                 Triple(effectiveStartOfDay, currentHourTimestamp, currentHourSteps)
