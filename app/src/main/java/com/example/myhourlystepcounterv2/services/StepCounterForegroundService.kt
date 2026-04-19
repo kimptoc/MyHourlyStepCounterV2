@@ -13,6 +13,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -20,6 +21,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.isActive
@@ -156,7 +158,7 @@ class StepCounterForegroundService : android.app.Service() {
         val elapsedHours: Int
     )
 
-    @OptIn(FlowPreview::class)
+    @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
@@ -301,12 +303,18 @@ class StepCounterForegroundService : android.app.Service() {
 
         // Observe flows and update notification / wake-lock accordingly
         scope.launch {
+            val currentHourCheckpointSteps = preferences.currentHourTimestamp
+                .flatMapLatest { currentHourTimestamp ->
+                    repository.getStepCountForHour(currentHourTimestamp)
+                }
+
             combine(
                 sensorManager.currentStepCount,
                 preferences.currentHourTimestamp,
+                currentHourCheckpointSteps,
                 preferences.useWakeLock,
                 notificationSyncing
-            ) { currentHourSteps, savedHourTimestamp, useWake, isSyncing ->
+            ) { currentHourSteps, savedHourTimestamp, checkpointSteps, useWake, isSyncing ->
                 android.util.Log.d("StepCounterFGSvc", "Live sensor: currentHourSteps=$currentHourSteps")
 
                 // Use wall-clock hour for DB exclusion to prevent overcount when
@@ -334,19 +342,28 @@ class StepCounterForegroundService : android.app.Service() {
                 }
 
                 // Get daily total from database (excluding current hour by wall-clock)
+                val checkpoint = checkpointSteps ?: 0
+                val displayedCurrentHourSteps = maxOf(currentHourSteps, checkpoint)
+                if (displayedCurrentHourSteps != currentHourSteps) {
+                    android.util.Log.w(
+                        "StepCounterFGSvc",
+                        "Notification current hour checkpoint is ahead of live sensor: " +
+                            "sensor=$currentHourSteps, checkpoint=$checkpoint. Displaying checkpointed value."
+                    )
+                }
                 val dbTotal = repository.getTotalStepsForDayExcludingCurrentHour(startOfDay, wallClockHourTimestamp).first() ?: 0
-                val dailyTotal = dbTotal + currentHourSteps
+                val dailyTotal = dbTotal + displayedCurrentHourSteps
                 val dayHistory = repository.getStepsForDay(startOfDay, wallClockHourTimestamp).first()
                 val timeline = buildTimelinePresentation(
                     now = java.util.Calendar.getInstance(),
                     dayHistory = dayHistory,
-                    currentHourSteps = currentHourSteps,
+                    currentHourSteps = displayedCurrentHourSteps,
                     isSyncing = isSyncing
                 )
 
-                android.util.Log.d("StepCounterFGSvc", "Calculated: dbTotal=$dbTotal, currentHour=$currentHourSteps, daily=$dailyTotal")
+                android.util.Log.d("StepCounterFGSvc", "Calculated: dbTotal=$dbTotal, currentHour=$displayedCurrentHourSteps, daily=$dailyTotal")
                 StepNotificationState(
-                    currentHourSteps = currentHourSteps,
+                    currentHourSteps = displayedCurrentHourSteps,
                     dailyTotal = dailyTotal,
                     useWakeLock = useWake,
                     isSyncing = isSyncing,
@@ -1050,19 +1067,28 @@ class StepCounterForegroundService : android.app.Service() {
             }.timeInMillis
 
             // Get daily total from database (excluding current hour by wall-clock)
+            val checkpointSteps = repository.getStepForHour(wallClockHourTimestamp)?.stepCount ?: 0
+            val displayedCurrentHourSteps = maxOf(currentHourSteps, checkpointSteps)
+            if (displayedCurrentHourSteps != currentHourSteps) {
+                android.util.Log.w(
+                    "StepCounterFGSvc",
+                    "Immediate notification checkpoint is ahead of live sensor: " +
+                        "sensor=$currentHourSteps, checkpoint=$checkpointSteps. Displaying checkpointed value."
+                )
+            }
             val dbTotal = repository.getTotalStepsForDayExcludingCurrentHour(startOfDay, wallClockHourTimestamp).first() ?: 0
-            val dailyTotal = dbTotal + currentHourSteps
+            val dailyTotal = dbTotal + displayedCurrentHourSteps
             val dayHistory = repository.getStepsForDay(startOfDay, wallClockHourTimestamp).first()
             val timeline = buildTimelinePresentation(
                 now = java.util.Calendar.getInstance(),
                 dayHistory = dayHistory,
-                currentHourSteps = currentHourSteps,
+                currentHourSteps = displayedCurrentHourSteps,
                 isSyncing = notificationSyncing.value
             )
 
-            android.util.Log.i("StepCounterFGSvc", "Forcing immediate notification update: hour=$currentHourSteps, daily=$dailyTotal")
+            android.util.Log.i("StepCounterFGSvc", "Forcing immediate notification update: hour=$displayedCurrentHourSteps, daily=$dailyTotal")
 
-            val notification = buildNotification(currentHourSteps, dailyTotal, timeline, notificationSyncing.value)
+            val notification = buildNotification(displayedCurrentHourSteps, dailyTotal, timeline, notificationSyncing.value)
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.notify(NOTIFICATION_ID, notification)
         } catch (e: Exception) {

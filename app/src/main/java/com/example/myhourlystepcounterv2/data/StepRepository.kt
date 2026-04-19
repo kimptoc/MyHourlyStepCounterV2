@@ -12,6 +12,10 @@ class StepRepository(private val stepDao: StepDao) {
         return stepDao.getStepForHour(timestamp)
     }
 
+    fun getStepCountForHour(timestamp: Long): Flow<Int?> {
+        return stepDao.getStepCountForHour(timestamp)
+    }
+
     fun getStepsForDay(startOfDay: Long, currentHourTimestamp: Long): Flow<List<StepEntity>> {
         return stepDao.getStepsForDay(startOfDay, currentHourTimestamp)
     }
