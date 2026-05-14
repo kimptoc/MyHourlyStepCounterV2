@@ -12,5 +12,10 @@ data class SensorState(
     val wasBelowThreshold: Boolean = false,
     val currentHourSteps: Int = 0,
     val hourTransitionInProgress: Boolean = false,
-    val lastSensorEventTimeMs: Long = 0L
+    val lastSensorEventTimeMs: Long = 0L,
+    // Steps accumulated in the current hour before the most recent device reboot.
+    // After reboot the TYPE_STEP_COUNTER restarts at 0 on this device, so we capture
+    // the pre-reboot in-hour delta here and add it to every display/save calculation
+    // until the next hour boundary clears it.
+    val preRebootOffset: Int = 0
 )

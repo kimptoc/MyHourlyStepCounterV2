@@ -179,8 +179,11 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
                     )
                 }
 
-                // Calculate steps for current hour
-                val stepsThisHour = newState.lastKnownStepCount - newState.lastHourStartStepCount
+                // Calculate steps for current hour, including any pre-reboot offset
+                // captured at reboot detection time (sensor restarts at 0 on reboot
+                // for this device, so the offset preserves pre-reboot in-hour steps).
+                val rawDelta = newState.lastKnownStepCount - newState.lastHourStartStepCount
+                val stepsThisHour = maxOf(0, rawDelta) + maxOf(0, newState.preRebootOffset)
                 val finalSteps = clampMonotonicHourSteps(
                     previousDisplayed = currentState.currentHourSteps,
                     calculatedStepsThisHour = stepsThisHour
@@ -196,7 +199,7 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
 
                 android.util.Log.d(
                     "StepSensor",
-                    "Sensor fired: absolute=$stepCount | hourBaseline=${newState.lastHourStartStepCount} | delta=$stepsThisHour | initialized=${newState.isInitialized}"
+                    "Sensor fired: absolute=$stepCount | hourBaseline=${newState.lastHourStartStepCount} | rawDelta=$rawDelta | preRebootOffset=${newState.preRebootOffset} | display=$stepsThisHour | initialized=${newState.isInitialized}"
                 )
 
                 // Record when this sensor event was received (for staleness detection)
@@ -233,7 +236,8 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
 
             val newState = currentState.copy(
                 lastHourStartStepCount = stepCount,
-                currentHourSteps = maxOf(0, currentState.lastKnownStepCount - stepCount)
+                currentHourSteps = maxOf(0, currentState.lastKnownStepCount - stepCount) +
+                    maxOf(0, currentState.preRebootOffset)
             )
 
             android.util.Log.i(
@@ -256,7 +260,8 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
             val newState = currentState.copy(
                 lastKnownStepCount = stepCount,
                 previousSensorValue = stepCount, // Update tracking for reset detection
-                currentHourSteps = maxOf(0, stepCount - currentState.lastHourStartStepCount)
+                currentHourSteps = maxOf(0, stepCount - currentState.lastHourStartStepCount) +
+                    maxOf(0, currentState.preRebootOffset)
             )
 
             _sensorState.value = newState
@@ -272,7 +277,8 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
 
             val newState = currentState.copy(
                 isInitialized = true,
-                currentHourSteps = maxOf(0, currentState.lastKnownStepCount - currentState.lastHourStartStepCount)
+                currentHourSteps = maxOf(0, currentState.lastKnownStepCount - currentState.lastHourStartStepCount) +
+                    maxOf(0, currentState.preRebootOffset)
             )
 
             _sensorState.value = newState
@@ -360,31 +366,63 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
     }
 
     /**
+     * Set the pre-reboot offset (steps walked in current hour before most recent reboot).
+     * Recomputes currentHourSteps to include the new offset.
+     */
+    suspend fun setPreRebootOffset(offset: Int) {
+        stateMutex.withLock {
+            val currentState = _sensorState.value
+            val safeOffset = maxOf(0, offset)
+
+            val newState = currentState.copy(
+                preRebootOffset = safeOffset,
+                currentHourSteps = maxOf(0, currentState.lastKnownStepCount - currentState.lastHourStartStepCount) +
+                    safeOffset
+            )
+
+            android.util.Log.i(
+                "StepSensor",
+                "setPreRebootOffset: $offset (was ${currentState.preRebootOffset}). " +
+                    "lastKnown=${currentState.lastKnownStepCount}, baseline=${currentState.lastHourStartStepCount}, " +
+                    "newDisplay=${newState.currentHourSteps}"
+            )
+
+            _sensorState.value = newState
+            _currentStepCount.value = newState.currentHourSteps
+        }
+    }
+
+    fun getPreRebootOffset(): Int = _sensorState.value.preRebootOffset
+
+    /**
      * Resets the sensor baseline for a new hour. Use with begin/endHourTransition.
      * Returns false if this baseline was already set (duplicate call).
+     * Clears any pre-reboot offset since a new hour starts fresh.
      */
     suspend fun resetForNewHour(currentStepCount: Int): Boolean {
         return stateMutex.withLock {
             val currentState = _sensorState.value
 
             // Prevent duplicate resets from race conditions
-            if (currentState.lastHourStartStepCount == currentStepCount) {
-                android.util.Log.d("StepSensor", "resetForNewHour: Baseline already set to $currentStepCount, ignoring duplicate")
+            if (currentState.lastHourStartStepCount == currentStepCount && currentState.preRebootOffset == 0) {
+                android.util.Log.d("StepSensor", "resetForNewHour: Baseline already set to $currentStepCount and no offset, ignoring duplicate")
                 return@withLock false
             }
 
             val oldBaseline = currentState.lastHourStartStepCount
+            val oldOffset = currentState.preRebootOffset
             val newState = currentState.copy(
                 lastHourStartStepCount = currentStepCount,
                 previousSensorValue = currentStepCount,  // Update tracking for reset detection
                 currentHourSteps = 0,
+                preRebootOffset = 0,  // New hour: clear any carried-over reboot offset
                 wasBelowThreshold = false  // Reset achievement tracking for new hour
             )
 
             _sensorState.value = newState
             _currentStepCount.value = 0
 
-            android.util.Log.i("StepSensor", "resetForNewHour: Baseline set to $currentStepCount (was $oldBaseline), display reset to 0")
+            android.util.Log.i("StepSensor", "resetForNewHour: Baseline set to $currentStepCount (was $oldBaseline), preRebootOffset cleared (was $oldOffset), display reset to 0")
             return@withLock true
         }
     }

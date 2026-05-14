@@ -47,6 +47,12 @@ class StepPreferences(private val context: Context) {
         val SECOND_REMINDER_SENT_THIS_HOUR = booleanPreferencesKey("second_reminder_sent_this_hour")
         val LAST_KNOWN_BOOT_COUNT = intPreferencesKey("last_known_boot_count")
 
+        // Pre-reboot offset: steps already accumulated in the current hour before the
+        // most recent reboot. The device's TYPE_STEP_COUNTER resets to 0 on reboot, so
+        // we persist the in-hour delta we observed pre-reboot and add it back at every
+        // display/save site until the next hour boundary clears it.
+        val CURRENT_HOUR_PRE_REBOOT_OFFSET = intPreferencesKey("current_hour_pre_reboot_offset")
+
         // Defaults (user requested defaults ON)
         const val PERMANENT_NOTIFICATION_DEFAULT = true
         const val USE_WAKE_LOCK_DEFAULT = true
@@ -100,6 +106,9 @@ class StepPreferences(private val context: Context) {
 
     val lastKnownBootCount: Flow<Int> = context.dataStore.data
         .map { preferences -> preferences[LAST_KNOWN_BOOT_COUNT] ?: -1 }
+
+    val currentHourPreRebootOffset: Flow<Int> = context.dataStore.data
+        .map { preferences -> preferences[CURRENT_HOUR_PRE_REBOOT_OFFSET] ?: 0 }
 
     val lastProcessedBoundaryTimestamp: Flow<Long> = context.dataStore.data
         .map { preferences -> preferences[LAST_PROCESSED_BOUNDARY_TIMESTAMP] ?: 0L }
@@ -236,6 +245,14 @@ class StepPreferences(private val context: Context) {
         context.dataStore.updateData { preferences ->
             preferences.toMutablePreferences().apply {
                 this[LAST_KNOWN_BOOT_COUNT] = bootCount
+            }
+        }
+    }
+
+    suspend fun saveCurrentHourPreRebootOffset(offset: Int) {
+        context.dataStore.updateData { preferences ->
+            preferences.toMutablePreferences().apply {
+                this[CURRENT_HOUR_PRE_REBOOT_OFFSET] = offset
             }
         }
     }

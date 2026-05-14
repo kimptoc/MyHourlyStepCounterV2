@@ -134,6 +134,90 @@ class StepCounterForegroundService : android.app.Service() {
             return estimatedHourSteps >= 0 && estimatedHourSteps > displayedSteps
         }
 
+        /**
+         * Variant of [shouldCheckpointUpdateNotification] that accounts for the pre-reboot
+         * offset captured at reboot detection time. The estimate is the post-reboot delta
+         * plus the offset that represents steps walked before the most recent reboot in
+         * the current hour.
+         */
+        fun shouldCheckpointUpdateNotificationWithOffset(
+            isInitialized: Boolean,
+            sensorAgeMs: Long,
+            currentTotal: Int,
+            hourBaseline: Int,
+            preRebootOffset: Int,
+            displayedSteps: Int
+        ): Boolean {
+            if (!isInitialized) return false
+            if (sensorAgeMs <= STALE_SENSOR_THRESHOLD_MS) return false
+            val rawDelta = currentTotal - hourBaseline
+            if (rawDelta < 0) return false
+            val estimatedHourSteps = rawDelta + maxOf(0, preRebootOffset)
+            return estimatedHourSteps > displayedSteps
+        }
+
+        /**
+         * Convert a saved sensor total + baseline pair into the in-hour step count that
+         * was accumulated before a reboot. Clamped to [0, maxStepsPerHour].
+         */
+        fun computePreRebootInHourSteps(
+            savedTotal: Int,
+            savedBaseline: Int,
+            maxStepsPerHour: Int
+        ): Int {
+            val delta = savedTotal - savedBaseline
+            return delta.coerceIn(0, maxStepsPerHour)
+        }
+
+        /**
+         * Sum an existing pre-reboot offset with the in-hour count from the most recent
+         * reboot (handles the multi-reboot-in-same-hour case). Clamped to [0, maxStepsPerHour].
+         */
+        fun accumulatePreRebootOffset(
+            currentOffset: Int,
+            newInHourSteps: Int,
+            maxStepsPerHour: Int
+        ): Int {
+            val safeCurrent = maxOf(0, currentOffset)
+            val safeNew = maxOf(0, newInHourSteps)
+            return (safeCurrent + safeNew).coerceIn(0, maxStepsPerHour)
+        }
+
+        /**
+         * Compute the displayed in-hour step count by adding the pre-reboot offset to the
+         * raw sensor delta. Raw delta is floored at 0; the offset is added on top.
+         */
+        fun computeDisplayedHourSteps(
+            currentTotal: Int,
+            hourBaseline: Int,
+            preRebootOffset: Int
+        ): Int {
+            val rawDelta = maxOf(0, currentTotal - hourBaseline)
+            return rawDelta + maxOf(0, preRebootOffset)
+        }
+
+        /**
+         * Compute the step count to persist for the just-completed hour at an hour boundary.
+         * If the sensor's absolute counter is unreliable (continuityBroken), fall back to
+         * only the offset — preserves pre-reboot steps even when post-reboot delta can't be
+         * trusted. Clamped to [0, maxStepsPerHour].
+         */
+        fun computeStepsForBoundarySave(
+            deviceTotal: Int,
+            baseline: Int,
+            preRebootOffset: Int,
+            continuityBroken: Boolean,
+            maxStepsPerHour: Int
+        ): Int {
+            val safeOffset = maxOf(0, preRebootOffset)
+            return if (continuityBroken) {
+                safeOffset.coerceAtMost(maxStepsPerHour)
+            } else {
+                val rawDelta = maxOf(0, deviceTotal - baseline)
+                (rawDelta + safeOffset).coerceAtMost(maxStepsPerHour)
+            }
+        }
+
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -274,24 +358,35 @@ class StepCounterForegroundService : android.app.Service() {
                 if (currentTotal > 0) {
                     preferences.saveDeviceTotalSnapshot(System.currentTimeMillis(), currentTotal)
                     saveCurrentHourCheckpoint(currentTotal)
+                    // Keep TOTAL_STEPS_DEVICE fresh between hour boundaries. Without this
+                    // it only updates at hour boundaries, leaving stale data that breaks
+                    // pre-reboot offset recovery for mid-hour reboots (issue #7).
+                    preferences.saveTotalStepsDevice(currentTotal)
 
                     // Feed checkpoint data back to notification pipeline when sensor events are stale.
                     // Without this, the notification shows 0 after reboot until the app is opened,
                     // because onSensorChanged() isn't called during doze/screen-off.
                     val checkpointSensorAge = System.currentTimeMillis() - sensorManager.getLastSensorEventTime()
-                    if (shouldCheckpointUpdateNotification(
-                            isInitialized = sensorManager.sensorState.value.isInitialized,
+                    val sensorStateNow = sensorManager.sensorState.value
+                    if (shouldCheckpointUpdateNotificationWithOffset(
+                            isInitialized = sensorStateNow.isInitialized,
                             sensorAgeMs = checkpointSensorAge,
                             currentTotal = currentTotal,
-                            hourBaseline = sensorManager.sensorState.value.lastHourStartStepCount,
+                            hourBaseline = sensorStateNow.lastHourStartStepCount,
+                            preRebootOffset = sensorStateNow.preRebootOffset,
                             displayedSteps = sensorManager.currentStepCount.value
                         )
                     ) {
+                        val estimate = computeDisplayedHourSteps(
+                            currentTotal = currentTotal,
+                            hourBaseline = sensorStateNow.lastHourStartStepCount,
+                            preRebootOffset = sensorStateNow.preRebootOffset
+                        )
                         android.util.Log.i(
                             "StepCounterFGSvc",
                             "Checkpoint: Updating stale notification from ${sensorManager.currentStepCount.value} to " +
-                                "${currentTotal - sensorManager.sensorState.value.lastHourStartStepCount} steps " +
-                                "(sensor ${checkpointSensorAge / 1000}s old)"
+                                "$estimate steps (offset=${sensorStateNow.preRebootOffset}, " +
+                                "sensor ${checkpointSensorAge / 1000}s old)"
                         )
                         sensorManager.setLastKnownStepCount(currentTotal)
                     }
@@ -818,9 +913,13 @@ class StepCounterForegroundService : android.app.Service() {
                         preferences.saveReminderSentThisHour(false)
                         preferences.saveSecondReminderSentThisHour(false)
                         preferences.saveAchievementSentThisHour(false)
+                        // Backfill writes hourly rows for all missed hours including the
+                        // saved hour, so any pre-reboot offset is now in DB. Clear it
+                        // so it doesn't get re-added in the current hour.
+                        preferences.saveCurrentHourPreRebootOffset(0)
                         android.util.Log.i(
                             "StepCounterFGSvc",
-                            "Reset to current hour: baseline=$deviceTotalToUse, timestamp=$currentHourTimestamp"
+                            "Reset to current hour: baseline=$deviceTotalToUse, timestamp=$currentHourTimestamp, preRebootOffset cleared"
                         )
                     }
                 } else {
@@ -947,27 +1046,30 @@ class StepCounterForegroundService : android.app.Service() {
                 rebootDetected = rebootDetected
             )
 
-            // Calculate steps in the PREVIOUS hour (that just ended)
-            var stepsInPreviousHour: Int
+            // Include any pre-reboot offset captured for the current hour. The offset
+            // represents steps walked before the most recent reboot, which the sensor
+            // counter (reset to 0 by reboot) cannot otherwise contribute.
+            val preRebootOffset = preferences.currentHourPreRebootOffset.first()
+            val stepsInPreviousHour = computeStepsForBoundarySave(
+                deviceTotal = deviceTotal,
+                baseline = previousHourStartStepCount,
+                preRebootOffset = preRebootOffset,
+                continuityBroken = continuityBroken,
+                maxStepsPerHour = StepTrackerConfig.MAX_STEPS_PER_HOUR
+            )
             if (continuityBroken) {
                 android.util.Log.w(
                     "StepCounterFGSvc",
                     "handleHourBoundary: Counter continuity broken " +
-                            "(device=$deviceTotal, baseline=$previousHourStartStepCount, reboot=$rebootDetected). " +
-                            "Saving 0 for previous hour."
+                            "(device=$deviceTotal, baseline=$previousHourStartStepCount, reboot=$rebootDetected, offset=$preRebootOffset). " +
+                            "Saving offset-only value $stepsInPreviousHour for previous hour."
                 )
-                stepsInPreviousHour = 0
-            } else {
-                stepsInPreviousHour = deviceTotal - previousHourStartStepCount
-
-                // Validate and clamp the value
-                if (stepsInPreviousHour < 0) {
-                    android.util.Log.w("StepCounterFGSvc", "Negative step delta ($stepsInPreviousHour). Clamping to 0.")
-                    stepsInPreviousHour = 0
-                } else if (stepsInPreviousHour > StepTrackerConfig.MAX_STEPS_PER_HOUR) {
-                    android.util.Log.w("StepCounterFGSvc", "Unreasonable step delta ($stepsInPreviousHour). Clamping to ${StepTrackerConfig.MAX_STEPS_PER_HOUR}.")
-                    stepsInPreviousHour = StepTrackerConfig.MAX_STEPS_PER_HOUR
-                }
+            } else if (preRebootOffset > 0) {
+                android.util.Log.i(
+                    "StepCounterFGSvc",
+                    "handleHourBoundary: Including preRebootOffset=$preRebootOffset in hour save. " +
+                        "Final stepsInPreviousHour=$stepsInPreviousHour"
+                )
             }
 
             // Mark as processed BEFORE async operations to prevent races
@@ -1020,9 +1122,15 @@ class StepCounterForegroundService : android.app.Service() {
                 preferences.saveSecondReminderSentThisHour(false)
                 preferences.saveAchievementSentThisHour(false)
 
+                // Clear pre-reboot offset: the hour it applied to has been saved.
+                if (preRebootOffset > 0) {
+                    preferences.saveCurrentHourPreRebootOffset(0)
+                    // sensorManager.resetForNewHour above already cleared the in-memory copy
+                }
+
                 android.util.Log.i(
                     "StepCounterFGSvc",
-                    "✓ Hour boundary processed: Saved $stepsInPreviousHour steps, reset to baseline=$deviceTotal, display=0"
+                    "✓ Hour boundary processed: Saved $stepsInPreviousHour steps, reset to baseline=$deviceTotal, display=0, preRebootOffset cleared"
                 )
             } finally {
                 // End hour transition - resume sensor events
@@ -1127,16 +1235,33 @@ class StepCounterForegroundService : android.app.Service() {
             android.util.Log.w(
                 "StepCounterFGSvc",
                 "initializeSensorFromPreferences: boot count changed ($savedBootCount -> $currentBootCount). " +
-                    "Ignoring pre-reboot cached totals."
+                    "Capturing pre-reboot in-hour steps as offset."
             )
+            handleRebootRecovery(
+                savedHourTimestamp = savedHourTimestamp,
+                currentHourTimestamp = currentHourTimestamp,
+                currentBootCount = currentBootCount
+            )
+            return
         }
 
-        if (!rebootDetected && savedHourTimestamp == currentHourTimestamp) {
+        if (savedHourTimestamp == currentHourTimestamp) {
             // Same hour as last save — seed from saved baseline (ViewModel Branch 2)
             val baselineCandidate = preferences.hourStartStepCount.first()
             val savedTotal = preferences.totalStepsDevice.first()
             val currentDeviceSteps = sensorManager.getCurrentTotalSteps()
             val hasFreshSensorEvent = sensorManager.getLastSensorEventTime() > 0L
+
+            // Restore any persisted pre-reboot offset (e.g., service was killed mid-hour
+            // after a previous reboot, and the offset is still pending).
+            val persistedOffset = preferences.currentHourPreRebootOffset.first()
+            if (persistedOffset > 0) {
+                sensorManager.setPreRebootOffset(persistedOffset)
+                android.util.Log.i(
+                    "StepCounterFGSvc",
+                    "initializeSensorFromPreferences: Restored persisted preRebootOffset=$persistedOffset for current hour"
+                )
+            }
 
             val baseline = if (baselineCandidate > 0) baselineCandidate else maxOf(savedTotal, currentDeviceSteps)
             val knownTotal = resolveKnownTotalForInitialization(
@@ -1156,13 +1281,23 @@ class StepCounterForegroundService : android.app.Service() {
                         "baseline=$baseline, knownTotal=$knownTotal, savedHour=${java.util.Date(savedHourTimestamp)}"
             )
         } else {
-            // Different hour or no saved timestamp — use current device total as baseline (ViewModel Branch 3)
+            // Different hour, no reboot — clear any stale offset (new hour starts fresh)
+            val staleOffset = preferences.currentHourPreRebootOffset.first()
+            if (staleOffset > 0) {
+                preferences.saveCurrentHourPreRebootOffset(0)
+                sensorManager.setPreRebootOffset(0)
+                android.util.Log.i(
+                    "StepCounterFGSvc",
+                    "initializeSensorFromPreferences: Cleared stale preRebootOffset=$staleOffset (hour changed)"
+                )
+            }
+
             var currentDeviceSteps = sensorManager.getCurrentTotalSteps()
 
             // If sensor hasn't delivered an event yet, try fallback from preferences
             if (currentDeviceSteps <= 0) {
                 val fallback = preferences.totalStepsDevice.first()
-                if (!rebootDetected && fallback > 0) {
+                if (fallback > 0) {
                     currentDeviceSteps = fallback
                     android.util.Log.w(
                         "StepCounterFGSvc",
@@ -1181,9 +1316,6 @@ class StepCounterForegroundService : android.app.Service() {
                     currentTimestamp = currentHourTimestamp,
                     totalSteps = currentDeviceSteps
                 )
-                if (currentBootCount > 0) {
-                    preferences.saveLastKnownBootCount(currentBootCount)
-                }
 
                 android.util.Log.i(
                     "StepCounterFGSvc",
@@ -1197,6 +1329,117 @@ class StepCounterForegroundService : android.app.Service() {
                             "Will initialize when first sensor event arrives."
                 )
             }
+        }
+    }
+
+    /**
+     * Recover from a device reboot. The Samsung device's TYPE_STEP_COUNTER resets to 0
+     * on reboot, so pre-reboot in-hour steps cannot be re-derived from the sensor.
+     * We capture them from the saved totalStepsDevice/hourStartStepCount as a "pre-reboot
+     * offset" that gets added to every display/save calculation until the next hour
+     * boundary clears it.
+     *
+     * Same-hour reboot: accumulate the offset and reset baseline to 0 for ongoing tracking.
+     * Cross-hour reboot: write the saved hour's count to DB (atomic-keep-higher protects
+     * any existing checkpoint) and start the new hour with no offset.
+     */
+    private suspend fun handleRebootRecovery(
+        savedHourTimestamp: Long,
+        currentHourTimestamp: Long,
+        currentBootCount: Int
+    ) {
+        val savedBaseline = preferences.hourStartStepCount.first()
+        val savedTotal = preferences.totalStepsDevice.first()
+        val preRebootInHourSteps = computePreRebootInHourSteps(
+            savedTotal = savedTotal,
+            savedBaseline = savedBaseline,
+            maxStepsPerHour = StepTrackerConfig.MAX_STEPS_PER_HOUR
+        )
+        val existingOffset = preferences.currentHourPreRebootOffset.first()
+
+        if (savedHourTimestamp == currentHourTimestamp) {
+            // Same-hour reboot: accumulate offset and reset baseline to 0
+            val newOffset = accumulatePreRebootOffset(
+                currentOffset = existingOffset,
+                newInHourSteps = preRebootInHourSteps,
+                maxStepsPerHour = StepTrackerConfig.MAX_STEPS_PER_HOUR
+            )
+
+            // Belt-and-braces: write to DB so notification recovers immediately even
+            // if a code path misses the offset. saveHourlyStepsAtomic keeps the higher
+            // value, so an existing checkpoint is preserved.
+            if (newOffset > 0) {
+                repository.saveHourlySteps(currentHourTimestamp, newOffset)
+            }
+
+            preferences.saveCurrentHourPreRebootOffset(newOffset)
+            sensorManager.setPreRebootOffset(newOffset)
+
+            // Set baseline to 0 so post-reboot sensor readings are treated as fresh
+            // in-hour deltas. Don't touch lastKnownStepCount — let any sensor events
+            // already received flow through (they're real post-reboot steps).
+            sensorManager.setLastHourStartStepCount(0)
+            sensorManager.markInitialized()
+
+            // Persist the current sensor reading as the new totalStepsDevice so
+            // subsequent restarts can compute the post-reboot delta correctly.
+            val postRebootSensorValue = sensorManager.getCurrentTotalSteps().coerceAtLeast(0)
+            preferences.saveHourData(
+                hourStartStepCount = 0,
+                currentTimestamp = currentHourTimestamp,
+                totalSteps = postRebootSensorValue
+            )
+            if (currentBootCount > 0) {
+                preferences.saveLastKnownBootCount(currentBootCount)
+            }
+
+            android.util.Log.i(
+                "StepCounterFGSvc",
+                "handleRebootRecovery (same hour): savedTotal=$savedTotal, savedBaseline=$savedBaseline, " +
+                    "preRebootInHourSteps=$preRebootInHourSteps, existingOffset=$existingOffset → newOffset=$newOffset. " +
+                    "Baseline reset to 0, sensor marked initialized."
+            )
+        } else {
+            // Cross-hour reboot: write to saved hour's DB row to preserve pre-reboot count
+            val combinedForSavedHour = accumulatePreRebootOffset(
+                currentOffset = existingOffset,
+                newInHourSteps = preRebootInHourSteps,
+                maxStepsPerHour = StepTrackerConfig.MAX_STEPS_PER_HOUR
+            )
+            if (combinedForSavedHour > 0 && savedHourTimestamp > 0) {
+                repository.saveHourlySteps(savedHourTimestamp, combinedForSavedHour)
+                android.util.Log.i(
+                    "StepCounterFGSvc",
+                    "handleRebootRecovery (cross hour): Saved $combinedForSavedHour steps to " +
+                        "${java.util.Date(savedHourTimestamp)} (preRebootInHourSteps=$preRebootInHourSteps, existingOffset=$existingOffset)"
+                )
+            }
+
+            // New hour starts fresh
+            preferences.saveCurrentHourPreRebootOffset(0)
+            sensorManager.setPreRebootOffset(0)
+
+            // Try to set up baseline for the new hour. Post-reboot the sensor is at 0,
+            // so the baseline will be set lazily as the first sensor event arrives.
+            val currentDeviceSteps = sensorManager.getCurrentTotalSteps()
+            sensorManager.setLastHourStartStepCount(currentDeviceSteps)
+            sensorManager.setLastKnownStepCount(currentDeviceSteps)
+            sensorManager.markInitialized()
+
+            preferences.saveHourData(
+                hourStartStepCount = currentDeviceSteps,
+                currentTimestamp = currentHourTimestamp,
+                totalSteps = currentDeviceSteps
+            )
+            if (currentBootCount > 0) {
+                preferences.saveLastKnownBootCount(currentBootCount)
+            }
+
+            android.util.Log.i(
+                "StepCounterFGSvc",
+                "handleRebootRecovery (cross hour): New hour ${java.util.Date(currentHourTimestamp)} initialized " +
+                    "with baseline=$currentDeviceSteps"
+            )
         }
     }
 
@@ -1394,11 +1637,18 @@ class StepCounterForegroundService : android.app.Service() {
             return
         }
 
-        val clampedSteps = (currentDeviceTotal - baseline).coerceIn(0, StepTrackerConfig.MAX_STEPS_PER_HOUR)
+        val preRebootOffset = preferences.currentHourPreRebootOffset.first()
+        val clampedSteps = computeStepsForBoundarySave(
+            deviceTotal = currentDeviceTotal,
+            baseline = baseline,
+            preRebootOffset = preRebootOffset,
+            continuityBroken = false,
+            maxStepsPerHour = StepTrackerConfig.MAX_STEPS_PER_HOUR
+        )
         repository.saveHourlySteps(currentHourTimestamp, clampedSteps)
         android.util.Log.d(
             "StepCounterFGSvc",
-            "Checkpoint saved for ${java.util.Date(currentHourTimestamp)}: steps=$clampedSteps"
+            "Checkpoint saved for ${java.util.Date(currentHourTimestamp)}: steps=$clampedSteps (delta=${currentDeviceTotal - baseline}, offset=$preRebootOffset)"
         )
     }
 }
