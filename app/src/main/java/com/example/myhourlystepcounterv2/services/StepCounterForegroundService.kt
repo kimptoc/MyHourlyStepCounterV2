@@ -185,15 +185,18 @@ class StepCounterForegroundService : android.app.Service() {
 
         /**
          * Compute the displayed in-hour step count by adding the pre-reboot offset to the
-         * raw sensor delta. Raw delta is floored at 0; the offset is added on top.
+         * raw sensor delta. Raw delta is floored at 0; the offset is added on top; the
+         * sum is capped at maxStepsPerHour to match the ceiling used by sibling helpers
+         * and DB save paths.
          */
         fun computeDisplayedHourSteps(
             currentTotal: Int,
             hourBaseline: Int,
-            preRebootOffset: Int
+            preRebootOffset: Int,
+            maxStepsPerHour: Int
         ): Int {
             val rawDelta = maxOf(0, currentTotal - hourBaseline)
-            return rawDelta + maxOf(0, preRebootOffset)
+            return (rawDelta + maxOf(0, preRebootOffset)).coerceAtMost(maxStepsPerHour)
         }
 
         /**
@@ -380,7 +383,8 @@ class StepCounterForegroundService : android.app.Service() {
                         val estimate = computeDisplayedHourSteps(
                             currentTotal = currentTotal,
                             hourBaseline = sensorStateNow.lastHourStartStepCount,
-                            preRebootOffset = sensorStateNow.preRebootOffset
+                            preRebootOffset = sensorStateNow.preRebootOffset,
+                            maxStepsPerHour = StepTrackerConfig.MAX_STEPS_PER_HOUR
                         )
                         android.util.Log.i(
                             "StepCounterFGSvc",

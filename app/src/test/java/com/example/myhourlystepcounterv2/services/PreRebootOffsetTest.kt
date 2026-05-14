@@ -77,30 +77,48 @@ class ComputeDisplayedHourStepsTest {
     @Test
     fun noOffset_returnsRawDelta() {
         // Pre-fix behavior: lastKnown=8200, baseline=8000 → 200
-        assertEquals(200, computeDisplayedHourSteps(currentTotal = 8200, hourBaseline = 8000, preRebootOffset = 0))
+        assertEquals(200, computeDisplayedHourSteps(
+            currentTotal = 8200, hourBaseline = 8000, preRebootOffset = 0, maxStepsPerHour = MAX
+        ))
     }
 
     @Test
     fun postRebootSameHour_addsOffsetToDelta() {
         // After reboot: sensor restarted at 0, user walked 50, offset captures pre-reboot 200
-        assertEquals(250, computeDisplayedHourSteps(currentTotal = 50, hourBaseline = 0, preRebootOffset = 200))
+        assertEquals(250, computeDisplayedHourSteps(
+            currentTotal = 50, hourBaseline = 0, preRebootOffset = 200, maxStepsPerHour = MAX
+        ))
     }
 
     @Test
     fun postRebootBeforeAnyWalking_returnsJustOffset() {
         // Right after reboot: sensor=0, baseline=0, offset=200 → display 200
-        assertEquals(200, computeDisplayedHourSteps(currentTotal = 0, hourBaseline = 0, preRebootOffset = 200))
+        assertEquals(200, computeDisplayedHourSteps(
+            currentTotal = 0, hourBaseline = 0, preRebootOffset = 200, maxStepsPerHour = MAX
+        ))
     }
 
     @Test
     fun negativeDelta_clampedToZeroBeforeAddingOffset() {
         // Defensive: sensor < baseline (shouldn't happen but protect)
-        assertEquals(200, computeDisplayedHourSteps(currentTotal = 100, hourBaseline = 500, preRebootOffset = 200))
+        assertEquals(200, computeDisplayedHourSteps(
+            currentTotal = 100, hourBaseline = 500, preRebootOffset = 200, maxStepsPerHour = MAX
+        ))
     }
 
     @Test
     fun zeroOffset_andZeroDelta_returnsZero() {
-        assertEquals(0, computeDisplayedHourSteps(currentTotal = 0, hourBaseline = 0, preRebootOffset = 0))
+        assertEquals(0, computeDisplayedHourSteps(
+            currentTotal = 0, hourBaseline = 0, preRebootOffset = 0, maxStepsPerHour = MAX
+        ))
+    }
+
+    @Test
+    fun sumExceedingMax_clampedToMax() {
+        // Offset near max + healthy post-reboot delta would overflow without cap
+        assertEquals(MAX, computeDisplayedHourSteps(
+            currentTotal = 3000, hourBaseline = 0, preRebootOffset = MAX - 100, maxStepsPerHour = MAX
+        ))
     }
 }
 
