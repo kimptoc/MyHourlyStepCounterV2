@@ -221,6 +221,42 @@ class StepCounterForegroundService : android.app.Service() {
             }
         }
 
+        /**
+         * Resolve the device-total reference to subtract from when back-filling missed
+         * hours. The device_total snapshot entering the missed window (latest snapshot at
+         * or before [rangeStart]) is ground truth and immune to a corrupted/zeroed saved
+         * total. Falls back to [savedDeviceTotal] only when no such snapshot exists.
+         */
+        fun resolveBackfillReferenceTotal(
+            savedDeviceTotal: Int,
+            snapshots: List<com.example.myhourlystepcounterv2.data.DeviceTotalSnapshot>,
+            rangeStart: Long
+        ): Int {
+            val snapshotAtOrBeforeStart = snapshots
+                .filter { it.timestamp <= rangeStart }
+                .maxByOrNull { it.timestamp }
+            return snapshotAtOrBeforeStart?.deviceTotal ?: savedDeviceTotal
+        }
+
+        /**
+         * Guard against fabricating phantom steps during missed-hour backfill. The
+         * reference must be a real positive total, monotonic with the current total, and
+         * the implied closure delta cannot exceed the physical maximum across the missed
+         * hours ([maxStepsPerHour] * [missedHourCount]). An implausible delta means the
+         * reference is corrupt — the caller skips writes rather than storing the clamp.
+         */
+        fun isBackfillReferencePlausible(
+            referenceTotal: Int,
+            deviceTotalToUse: Int,
+            missedHourCount: Int,
+            maxStepsPerHour: Int
+        ): Boolean {
+            if (referenceTotal <= 0) return false
+            if (deviceTotalToUse < referenceTotal) return false
+            val maxPlausible = maxStepsPerHour.toLong() * maxOf(1, missedHourCount)
+            return (deviceTotalToUse - referenceTotal) <= maxPlausible
+        }
+
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -825,18 +861,37 @@ class StepCounterForegroundService : android.app.Service() {
                 0
             }
 
+            val snapshots = preferences.getDeviceTotalSnapshots()
+            // The device_total snapshot entering the missed window is the trustworthy
+            // reference to subtract from — immune to a zeroed/stale saved total that
+            // would otherwise make the whole lifetime count look like steps-while-closed.
+            val referenceTotal = resolveBackfillReferenceTotal(
+                savedDeviceTotal = validSavedDeviceTotal,
+                snapshots = snapshots,
+                rangeStart = rangeStart
+            )
+            val missedHourCount = ((rangeEnd - rangeStart) / (60 * 60 * 1000)).toInt() + 1
+            val referencePlausible = isBackfillReferencePlausible(
+                referenceTotal = referenceTotal,
+                deviceTotalToUse = deviceTotalToUse,
+                missedHourCount = missedHourCount,
+                maxStepsPerHour = StepTrackerConfig.MAX_STEPS_PER_HOUR
+            )
+
             val totalStepsWhileClosed = if (!continuityBroken && deviceTotalToUse > 0) {
-                deviceTotalToUse - validSavedDeviceTotal
+                deviceTotalToUse - referenceTotal
             } else {
                 0
             }
-            if (totalStepsWhileClosed <= 0) {
+            if (totalStepsWhileClosed <= 0 || !referencePlausible) {
                 android.util.Log.w(
                     "StepCounterFGSvc",
-                    "Backfill: totalStepsWhileClosed=$totalStepsWhileClosed. Skipping hour writes."
+                    "Backfill: Skipping hour writes (totalStepsWhileClosed=$totalStepsWhileClosed, " +
+                        "referenceTotal=$referenceTotal, deviceTotalToUse=$deviceTotalToUse, " +
+                        "missedHourCount=$missedHourCount, plausible=$referencePlausible). " +
+                        "Avoiding phantom steps from an untrustworthy reference total."
                 )
             } else {
-                val snapshots = preferences.getDeviceTotalSnapshots()
                 val snapshotByHour = snapshots
                     .filter { it.timestamp in rangeStart until currentHourTimestamp }
                     .groupBy { ts ->
@@ -847,7 +902,7 @@ class StepCounterForegroundService : android.app.Service() {
                 val missingWithoutSnapshot = mutableListOf<Long>()
                 var accountedSteps = 0
                 var assignedSteps = 0
-                var previousTotal = validSavedDeviceTotal
+                var previousTotal = referenceTotal
                 var hourCursor = rangeStart
 
                 while (hourCursor <= rangeEnd) {
