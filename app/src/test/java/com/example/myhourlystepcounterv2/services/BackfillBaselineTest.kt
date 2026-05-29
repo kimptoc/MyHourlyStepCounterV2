@@ -10,8 +10,6 @@ import org.junit.Test
 
 class BackfillBaselineTest {
 
-    private val hour = 60 * 60 * 1000L
-
     @Test
     fun resolveBackfillReferenceTotal_usesSnapshotAtOrBeforeRangeStart() {
         val rangeStart = 1_780_023_600_000L // 04:00
@@ -124,6 +122,28 @@ class BackfillBaselineTest {
                 referenceTotal = 50000,
                 deviceTotalToUse = 70000, // 20000 across 2 hours == 2 * 10000
                 missedHourCount = 2,
+                maxStepsPerHour = 10000
+            )
+        )
+    }
+
+    @Test
+    fun isBackfillReferencePlausible_treatsNonPositiveMissedHoursAsOneHour() {
+        // The maxOf(1, missedHourCount) clamp must not collapse the ceiling to 0 and
+        // reject every reference when the hour count is zero/negative.
+        assertTrue(
+            isBackfillReferencePlausible(
+                referenceTotal = 50000,
+                deviceTotalToUse = 60000, // delta 10000 == 1 * maxStepsPerHour
+                missedHourCount = 0,
+                maxStepsPerHour = 10000
+            )
+        )
+        assertFalse(
+            isBackfillReferencePlausible(
+                referenceTotal = 50000,
+                deviceTotalToUse = 60001, // delta 10001 exceeds the one-hour ceiling
+                missedHourCount = 0,
                 maxStepsPerHour = 10000
             )
         )
