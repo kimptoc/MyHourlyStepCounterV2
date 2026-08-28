@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.myhourlystepcounterv2.StepTrackerConfig
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
@@ -53,10 +54,14 @@ class StepPreferences(private val context: Context) {
         // display/save site until the next hour boundary clears it.
         val CURRENT_HOUR_PRE_REBOOT_OFFSET = intPreferencesKey("current_hour_pre_reboot_offset")
 
+        // User-configurable hourly step goal (used for reminders, progress ring, and history markers)
+        val HOURLY_STEP_GOAL = intPreferencesKey("hourly_step_goal")
+
         // Defaults (user requested defaults ON)
         const val PERMANENT_NOTIFICATION_DEFAULT = true
         const val USE_WAKE_LOCK_DEFAULT = true
         const val REMINDER_NOTIFICATION_DEFAULT = true
+        const val HOURLY_STEP_GOAL_DEFAULT = StepTrackerConfig.STEP_REMINDER_THRESHOLD
 
         private const val SNAPSHOT_RETENTION_MS = 24 * 60 * 60 * 1000L
     }
@@ -88,6 +93,9 @@ class StepPreferences(private val context: Context) {
 
     val reminderNotificationEnabled: Flow<Boolean> = context.dataStore.data
         .map { preferences -> preferences[REMINDER_NOTIFICATION_ENABLED] ?: REMINDER_NOTIFICATION_DEFAULT }
+
+    val hourlyStepGoal: Flow<Int> = context.dataStore.data
+        .map { preferences -> preferences[HOURLY_STEP_GOAL] ?: HOURLY_STEP_GOAL_DEFAULT }
 
     val lastReminderNotificationTime: Flow<Long> = context.dataStore.data
         .map { preferences -> preferences[LAST_REMINDER_NOTIFICATION_TIME] ?: 0L }
@@ -197,6 +205,14 @@ class StepPreferences(private val context: Context) {
         context.dataStore.updateData { preferences ->
             preferences.toMutablePreferences().apply {
                 this[REMINDER_NOTIFICATION_ENABLED] = enabled
+            }
+        }
+    }
+
+    suspend fun saveHourlyStepGoal(goal: Int) {
+        context.dataStore.updateData { preferences ->
+            preferences.toMutablePreferences().apply {
+                this[HOURLY_STEP_GOAL] = goal
             }
         }
     }

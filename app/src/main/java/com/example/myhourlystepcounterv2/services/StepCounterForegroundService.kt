@@ -273,6 +273,7 @@ class StepCounterForegroundService : android.app.Service() {
     @Volatile private var lastProcessedBoundaryTimestamp: Long = 0
     @Volatile private var lastStalenessLogTime: Long = 0
     @Volatile private var lastCheckpointSkipLogTime: Long = 0
+    @Volatile private var hourlyGoal: Int = StepTrackerConfig.STEP_REMINDER_THRESHOLD
     private val notificationSyncing = MutableStateFlow(true)
     private data class TimelinePresentation(
         val statesExpanded: String,
@@ -295,6 +296,10 @@ class StepCounterForegroundService : android.app.Service() {
             if (bootCount > 0 && savedBootCount <= 0) {
                 preferences.saveLastKnownBootCount(bootCount)
             }
+        }
+
+        scope.launch {
+            preferences.hourlyStepGoal.collect { hourlyGoal = it }
         }
 
         // Get singleton sensor manager — may or may not be initialized by ViewModel
@@ -621,7 +626,7 @@ class StepCounterForegroundService : android.app.Service() {
         currentHourSteps: Int,
         isSyncing: Boolean
     ): TimelinePresentation {
-        val goal = StepTrackerConfig.STEP_REMINDER_THRESHOLD
+        val goal = hourlyGoal
         val currentHour = now.get(java.util.Calendar.HOUR_OF_DAY)
         val startOfDayCalendar = now.clone().let { it as java.util.Calendar }.apply {
             set(java.util.Calendar.HOUR_OF_DAY, 0)

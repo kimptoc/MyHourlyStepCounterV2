@@ -39,7 +39,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.TextUnit
-import com.example.myhourlystepcounterv2.StepTrackerConfig
 import com.example.myhourlystepcounterv2.R
 import com.example.myhourlystepcounterv2.ui.theme.GradientGreenEnd
 import com.example.myhourlystepcounterv2.ui.theme.GradientGreenStart
@@ -56,6 +55,7 @@ fun HomeScreen(
     val isSyncing by viewModel.isSyncing.collectAsState()
     val dailySteps by viewModel.dailySteps.collectAsState()
     val currentTime by viewModel.currentTime.collectAsState()
+    val hourlyGoal by viewModel.hourlyStepGoal.collectAsState()
 
     // Format current time with minutes and seconds
     val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
@@ -73,8 +73,7 @@ fun HomeScreen(
         28.sp
     }
 
-    // Calculate progress for hourly goal (250 steps from StepTrackerConfig)
-    val hourlyGoal = StepTrackerConfig.STEP_REMINDER_THRESHOLD
+    // Calculate progress towards the user-configurable hourly step goal
     val progress = if (isSyncing) 0f else (hourlySteps.toFloat() / hourlyGoal).coerceIn(0f, 1f)
     val scrollState = rememberScrollState()
 

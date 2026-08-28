@@ -90,6 +90,9 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
     private val _currentTime = MutableStateFlow(System.currentTimeMillis())
     val currentTime: StateFlow<Long> = _currentTime.asStateFlow()
 
+    private val _hourlyStepGoal = MutableStateFlow(StepTrackerConfig.STEP_REMINDER_THRESHOLD)
+    val hourlyStepGoal: StateFlow<Int> = _hourlyStepGoal.asStateFlow()
+
     /**
      * Initialize the view model with context-dependent components.
      * IMPORTANT: Must be called with context.applicationContext (not Activity context)
@@ -108,6 +111,10 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
 
         sensorManager = StepSensorManager.getInstance(context)
         preferences = StepPreferences(context)
+
+        viewModelScope.launch {
+            preferences.hourlyStepGoal.collect { _hourlyStepGoal.value = it }
+        }
 
         // Check permission before registering sensor listener
         if (PermissionHelper.hasActivityRecognitionPermission(context)) {

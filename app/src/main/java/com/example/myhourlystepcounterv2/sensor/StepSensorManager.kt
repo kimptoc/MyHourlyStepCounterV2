@@ -53,6 +53,17 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
     private val _currentStepCount = MutableStateFlow(0)
     val currentStepCount: StateFlow<Int> = _currentStepCount.asStateFlow()
 
+    // Cached copy of the user-configurable hourly step goal, kept in sync with DataStore.
+    // Cached (rather than suspending) because achievement checks happen on the sensor
+    // callback's hot path.
+    @Volatile private var hourlyGoal: Int = StepTrackerConfig.STEP_REMINDER_THRESHOLD
+
+    init {
+        scope.launch {
+            preferences.hourlyStepGoal.collect { hourlyGoal = it }
+        }
+    }
+
     companion object {
         @Volatile
         private var INSTANCE: StepSensorManager? = null
@@ -285,7 +296,7 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
             _currentStepCount.value = newState.currentHourSteps
 
             // Check for achievements after initialization
-            if (newState.currentHourSteps >= StepTrackerConfig.STEP_REMINDER_THRESHOLD) {
+            if (newState.currentHourSteps >= hourlyGoal) {
                 checkForAchievement(newState, newState.currentHourSteps)
             }
         }
@@ -293,7 +304,7 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
 
     private fun checkForAchievement(state: SensorState, currentSteps: Int) {
         // Track if we're below threshold (no coroutine needed)
-        if (currentSteps < StepTrackerConfig.STEP_REMINDER_THRESHOLD) {
+        if (currentSteps < hourlyGoal) {
             // Update state to reflect we were below threshold
             scope.launch {
                 stateMutex.withLock {
@@ -318,7 +329,7 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
                     if ((reminderSent || secondReminderSent) && !achievementSent) {
                         android.util.Log.i(
                             "StepSensor",
-                            "Achievement unlocked: $currentSteps steps >= ${StepTrackerConfig.STEP_REMINDER_THRESHOLD} after reminder"
+                            "Achievement unlocked: $currentSteps steps >= $hourlyGoal after reminder"
                         )
 
                         NotificationHelper.sendStepAchievementNotification(appContext, currentSteps)
