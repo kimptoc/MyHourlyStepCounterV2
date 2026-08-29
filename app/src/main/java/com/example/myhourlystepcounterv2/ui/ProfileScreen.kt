@@ -260,7 +260,7 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
                 initial = com.example.myhourlystepcounterv2.data.StepPreferences.HOURLY_STEP_GOAL_DEFAULT
             )
             var goalInput by remember(hourlyGoal) { mutableStateOf(hourlyGoal.toString()) }
-            var goalError by remember { mutableStateOf(false) }
+            var goalErrorMessage by remember { mutableStateOf<String?>(null) }
 
             Text(
                 text = "Hourly Step Goal",
@@ -274,11 +274,11 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
                     value = goalInput,
                     onValueChange = {
                         goalInput = it
-                        goalError = false
+                        goalErrorMessage = null
                     },
                     label = { Text("Steps per hour") },
                     singleLine = true,
-                    isError = goalError,
+                    isError = goalErrorMessage != null,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.weight(1f)
                 )
@@ -286,25 +286,27 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
                 Button(onClick = {
                     val parsedGoal = goalInput.toIntOrNull()
                     if (parsedGoal != null && parsedGoal in 1..StepTrackerConfig.MAX_STEPS_PER_HOUR) {
-                        goalError = false
+                        goalErrorMessage = null
                         coroutineScope.launch {
                             try {
                                 preferences.saveHourlyStepGoal(parsedGoal)
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
                             } catch (e: Exception) {
-                                goalError = true
+                                goalErrorMessage = "Failed to save goal. Please try again."
                             }
                         }
                     } else {
-                        goalError = true
+                        goalErrorMessage = "Enter a whole number between 1 and ${StepTrackerConfig.MAX_STEPS_DISPLAY}"
                     }
                 }) {
                     Text("Save")
                 }
             }
 
-            if (goalError) {
+            goalErrorMessage?.let { message ->
                 Text(
-                    text = "Enter a whole number between 1 and ${StepTrackerConfig.MAX_STEPS_DISPLAY}",
+                    text = message,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(start = 8.dp, top = 4.dp)
