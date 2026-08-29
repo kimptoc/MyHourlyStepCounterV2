@@ -74,7 +74,7 @@ fun HomeScreen(
     }
 
     // Calculate progress towards the user-configurable hourly step goal
-    val progress = if (isSyncing) 0f else (hourlySteps.toFloat() / hourlyGoal).coerceIn(0f, 1f)
+    val progress = if (isSyncing || hourlyGoal <= 0) 0f else (hourlySteps.toFloat() / hourlyGoal).coerceIn(0f, 1f)
     val scrollState = rememberScrollState()
 
     Column(

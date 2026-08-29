@@ -95,7 +95,9 @@ class StepPreferences(private val context: Context) {
         .map { preferences -> preferences[REMINDER_NOTIFICATION_ENABLED] ?: REMINDER_NOTIFICATION_DEFAULT }
 
     val hourlyStepGoal: Flow<Int> = context.dataStore.data
-        .map { preferences -> preferences[HOURLY_STEP_GOAL] ?: HOURLY_STEP_GOAL_DEFAULT }
+        .map { preferences ->
+            (preferences[HOURLY_STEP_GOAL] ?: HOURLY_STEP_GOAL_DEFAULT).coerceIn(1, StepTrackerConfig.MAX_STEPS_PER_HOUR)
+        }
 
     val lastReminderNotificationTime: Flow<Long> = context.dataStore.data
         .map { preferences -> preferences[LAST_REMINDER_NOTIFICATION_TIME] ?: 0L }

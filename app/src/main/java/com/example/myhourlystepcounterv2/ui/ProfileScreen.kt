@@ -287,7 +287,13 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
                     val parsedGoal = goalInput.toIntOrNull()
                     if (parsedGoal != null && parsedGoal in 1..StepTrackerConfig.MAX_STEPS_PER_HOUR) {
                         goalError = false
-                        coroutineScope.launch { preferences.saveHourlyStepGoal(parsedGoal) }
+                        coroutineScope.launch {
+                            try {
+                                preferences.saveHourlyStepGoal(parsedGoal)
+                            } catch (e: Exception) {
+                                goalError = true
+                            }
+                        }
                     } else {
                         goalError = true
                     }
