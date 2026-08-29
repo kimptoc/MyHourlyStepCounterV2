@@ -11,7 +11,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -19,17 +21,21 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.collectAsState
 import androidx.compose.foundation.layout.Row
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.myhourlystepcounterv2.BuildConfig
@@ -39,6 +45,8 @@ import com.example.myhourlystepcounterv2.StepTrackerConfig
 fun ProfileScreen(modifier: Modifier = Modifier) {
     val scrollState = rememberScrollState()
     val context = androidx.compose.ui.platform.LocalContext.current
+    val preferences = remember { com.example.myhourlystepcounterv2.data.StepPreferences(context.applicationContext) }
+    val coroutineScope = rememberCoroutineScope()
     val powerManager = remember { context.getSystemService(Context.POWER_SERVICE) as PowerManager }
 
     // Check battery optimization status
@@ -243,15 +251,83 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // Hourly step goal (user-configurable)
+        Column(
+            horizontalAlignment = Alignment.Start,
+            modifier = Modifier.padding(16.dp)
+        ) {
+            val hourlyGoal by preferences.hourlyStepGoal.collectAsState(
+                initial = com.example.myhourlystepcounterv2.data.StepPreferences.HOURLY_STEP_GOAL_DEFAULT
+            )
+            var goalInput by remember(hourlyGoal) { mutableStateOf(hourlyGoal.toString()) }
+            var goalErrorMessage by remember { mutableStateOf<String?>(null) }
+
+            Text(
+                text = "Hourly Step Goal",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = goalInput,
+                    onValueChange = {
+                        goalInput = it
+                        goalErrorMessage = null
+                    },
+                    label = { Text("Steps per hour") },
+                    singleLine = true,
+                    isError = goalErrorMessage != null,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Button(onClick = {
+                    val parsedGoal = goalInput.toIntOrNull()
+                    if (parsedGoal != null && parsedGoal in 1..StepTrackerConfig.MAX_STEPS_PER_HOUR) {
+                        goalErrorMessage = null
+                        coroutineScope.launch {
+                            try {
+                                preferences.saveHourlyStepGoal(parsedGoal)
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                goalErrorMessage = "Failed to save goal. Please try again."
+                            }
+                        }
+                    } else {
+                        goalErrorMessage = "Enter a whole number between 1 and ${StepTrackerConfig.MAX_STEPS_DISPLAY}"
+                    }
+                }) {
+                    Text("Save")
+                }
+            }
+
+            goalErrorMessage?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(start = 8.dp, top = 4.dp)
+                )
+            }
+
+            Text(
+                text = "Steps needed each hour to hit your goal. Used for reminders, the progress ring, and history markers.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 8.dp, top = 4.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // Permanent notification & wake-lock toggles
         Column(
             horizontalAlignment = Alignment.Start,
             modifier = Modifier.padding(16.dp)
         ) {
-            val context = androidx.compose.ui.platform.LocalContext.current
-            val preferences = remember { com.example.myhourlystepcounterv2.data.StepPreferences(context.applicationContext) }
-            val coroutineScope = rememberCoroutineScope()
-
             Text(
                 text = "App Behavior Settings",
                 style = MaterialTheme.typography.titleMedium,

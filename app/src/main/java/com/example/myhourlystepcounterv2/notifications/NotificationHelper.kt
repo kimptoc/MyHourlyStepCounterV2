@@ -19,7 +19,7 @@ object NotificationHelper {
     private const val URGENT_NOTIFICATION_ID = 102
     private const val ACHIEVEMENT_NOTIFICATION_ID = 101
 
-    fun sendStepReminderNotification(context: Context, currentSteps: Int) {
+    fun sendStepReminderNotification(context: Context, currentSteps: Int, goal: Int = StepTrackerConfig.STEP_REMINDER_THRESHOLD) {
         createReminderNotificationChannel(context)
 
         val intent = Intent(context, MainActivity::class.java).apply {
@@ -40,7 +40,7 @@ object NotificationHelper {
                 context.getString(
                     R.string.reminder_notification_text,
                     currentSteps,
-                    StepTrackerConfig.STEP_REMINDER_THRESHOLD
+                    goal
                 )
             )
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -54,7 +54,7 @@ object NotificationHelper {
         notificationManager.notify(NOTIFICATION_ID, notification)
     }
 
-    fun sendSecondStepReminderNotification(context: Context, currentSteps: Int) {
+    fun sendSecondStepReminderNotification(context: Context, currentSteps: Int, goal: Int = StepTrackerConfig.STEP_REMINDER_THRESHOLD) {
         createUrgentReminderNotificationChannel(context)
 
         val intent = Intent(context, MainActivity::class.java).apply {
@@ -75,7 +75,7 @@ object NotificationHelper {
                 context.getString(
                     R.string.second_reminder_notification_text,
                     currentSteps,
-                    StepTrackerConfig.STEP_REMINDER_THRESHOLD
+                    goal
                 )
             )
             .setStyle(
@@ -83,7 +83,7 @@ object NotificationHelper {
                     context.getString(
                         R.string.second_reminder_notification_text,
                         currentSteps,
-                        StepTrackerConfig.STEP_REMINDER_THRESHOLD
+                        goal
                     )
                 )
             )

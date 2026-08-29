@@ -39,7 +39,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.example.myhourlystepcounterv2.StepTrackerConfig
 import com.example.myhourlystepcounterv2.data.StepEntity
 import com.example.myhourlystepcounterv2.ui.theme.ActivityHigh
 import com.example.myhourlystepcounterv2.ui.theme.ActivityLow
@@ -54,6 +53,7 @@ fun HistoryScreen(
     modifier: Modifier = Modifier
 ) {
     val dayHistory by viewModel.dayHistory.collectAsState()
+    val hourlyGoal by viewModel.hourlyStepGoal.collectAsState()
 
     Column(
         modifier = modifier
@@ -132,6 +132,7 @@ fun HistoryScreen(
             if (dayHistory.isNotEmpty()) {
                 ActivityBarChart(
                     history = dayHistory,
+                    hourlyGoal = hourlyGoal,
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
             }
@@ -184,6 +185,7 @@ fun SummaryStatCard(
 @Composable
 fun ActivityBarChart(
     history: List<StepEntity>,
+    hourlyGoal: Int,
     modifier: Modifier = Modifier
 ) {
     val maxSteps = history.maxOfOrNull { it.stepCount } ?: 1
@@ -216,7 +218,7 @@ fun ActivityBarChart(
 
                 val progress = if (maxSteps > 0) step.stepCount.toFloat() / maxSteps else 0f
                 val activityLevel = getActivityLevel(step.stepCount)
-                val goalReached = step.stepCount >= StepTrackerConfig.STEP_REMINDER_THRESHOLD
+                val goalReached = step.stepCount >= hourlyGoal
 
                 Row(
                     modifier = Modifier

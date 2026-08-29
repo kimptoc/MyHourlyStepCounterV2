@@ -12,7 +12,6 @@ import com.example.myhourlystepcounterv2.data.StepDatabase
 import com.example.myhourlystepcounterv2.data.StepPreferences
 import com.example.myhourlystepcounterv2.data.StepRepository
 import com.example.myhourlystepcounterv2.sensor.StepSensorManager
-import com.example.myhourlystepcounterv2.StepTrackerConfig
 import java.util.Calendar
 
 class StepReminderReceiver : BroadcastReceiver() {
@@ -102,17 +101,19 @@ class StepReminderReceiver : BroadcastReceiver() {
         val sensorManager = StepSensorManager.getInstance(context)
 
         val currentHourSteps = getDisplayedCurrentHourSteps(repository, sensorManager, currentHourStart)
+        val goal = preferences.hourlyStepGoal.first()
 
         android.util.Log.d(
             "StepReminder",
-            "First: Current hour steps: $currentHourSteps (threshold: ${StepTrackerConfig.STEP_REMINDER_THRESHOLD})"
+            "First: Current hour steps: $currentHourSteps (threshold: $goal)"
         )
 
         // Send notification if below threshold
-        if (currentHourSteps < StepTrackerConfig.STEP_REMINDER_THRESHOLD) {
+        if (currentHourSteps < goal) {
             NotificationHelper.sendStepReminderNotification(
                 context,
-                currentHourSteps
+                currentHourSteps,
+                goal
             )
 
             // Record notification time and state
@@ -121,12 +122,12 @@ class StepReminderReceiver : BroadcastReceiver() {
 
             android.util.Log.i(
                 "StepReminder",
-                "First: Sent reminder notification: $currentHourSteps steps < ${StepTrackerConfig.STEP_REMINDER_THRESHOLD}"
+                "First: Sent reminder notification: $currentHourSteps steps < $goal"
             )
         } else {
             android.util.Log.d(
                 "StepReminder",
-                "First: No notification needed: $currentHourSteps steps >= ${StepTrackerConfig.STEP_REMINDER_THRESHOLD}"
+                "First: No notification needed: $currentHourSteps steps >= $goal"
             )
         }
 
@@ -155,17 +156,19 @@ class StepReminderReceiver : BroadcastReceiver() {
         val sensorManager = StepSensorManager.getInstance(context)
 
         val currentHourSteps = getDisplayedCurrentHourSteps(repository, sensorManager, currentHourStart)
+        val goal = preferences.hourlyStepGoal.first()
 
         android.util.Log.d(
             "StepReminder",
-            "Second: Current hour steps: $currentHourSteps (threshold: ${StepTrackerConfig.STEP_REMINDER_THRESHOLD})"
+            "Second: Current hour steps: $currentHourSteps (threshold: $goal)"
         )
 
         // Send second reminder only if STILL below threshold
-        if (currentHourSteps < StepTrackerConfig.STEP_REMINDER_THRESHOLD) {
+        if (currentHourSteps < goal) {
             NotificationHelper.sendSecondStepReminderNotification(
                 context,
-                currentHourSteps
+                currentHourSteps,
+                goal
             )
 
             // Record notification time and state
@@ -174,12 +177,12 @@ class StepReminderReceiver : BroadcastReceiver() {
 
             android.util.Log.i(
                 "StepReminder",
-                "Second: Sent urgent reminder notification: $currentHourSteps steps < ${StepTrackerConfig.STEP_REMINDER_THRESHOLD}"
+                "Second: Sent urgent reminder notification: $currentHourSteps steps < $goal"
             )
         } else {
             android.util.Log.d(
                 "StepReminder",
-                "Second: No notification needed: $currentHourSteps steps >= ${StepTrackerConfig.STEP_REMINDER_THRESHOLD}"
+                "Second: No notification needed: $currentHourSteps steps >= $goal"
             )
         }
 
