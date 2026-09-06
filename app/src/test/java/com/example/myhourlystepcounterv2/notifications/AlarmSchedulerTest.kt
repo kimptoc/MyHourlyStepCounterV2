@@ -288,4 +288,68 @@ class AlarmSchedulerTest {
             alarm.getType()
         )
     }
+
+    @Test
+    fun testScheduleHourBoundaryAlarms_withExactPermission_schedulesExactAlarm() {
+        // Given - exact alarms are granted
+        ShadowAlarmManager.setCanScheduleExactAlarms(true)
+
+        // When - scheduling without the test skip override
+        AlarmScheduler.scheduleHourBoundaryAlarms(context)
+
+        // Then - an exact allow-while-idle alarm is used
+        val scheduledAlarms = shadowAlarmManager.scheduledAlarms
+        assertTrue("Hour boundary alarm should be scheduled", scheduledAlarms.isNotEmpty())
+        val alarm = scheduledAlarms.last()
+        assertEquals(AlarmManager.RTC_WAKEUP, alarm.getType())
+        assertTrue("Exact alarm must wake during doze", alarm.isAllowWhileIdle)
+        assertEquals(
+            "Alarm should be exact",
+            ShadowAlarmManager.WINDOW_EXACT,
+            alarm.windowLengthMs
+        )
+    }
+
+    @Test
+    fun testScheduleHourBoundaryAlarms_withoutExactPermission_schedulesInexactFallback() {
+        // Given - SCHEDULE_EXACT_ALARM not granted
+        ShadowAlarmManager.setCanScheduleExactAlarms(false)
+
+        // When - scheduling normally (no skip override)
+        AlarmScheduler.scheduleHourBoundaryAlarms(context)
+
+        // Then - a fallback alarm is still scheduled (previously this silently did nothing),
+        // so the hour boundary still fires in doze, just possibly deferred
+        val scheduledAlarms = shadowAlarmManager.scheduledAlarms
+        assertTrue("Hour boundary fallback alarm should be scheduled", scheduledAlarms.isNotEmpty())
+        val alarm = scheduledAlarms.last()
+        assertEquals(AlarmManager.RTC_WAKEUP, alarm.getType())
+        assertTrue("Fallback alarm must wake during doze", alarm.isAllowWhileIdle)
+        assertEquals(
+            "Fallback alarm should be inexact (setAndAllowWhileIdle, not setExactAndAllowWhileIdle)",
+            ShadowAlarmManager.WINDOW_HEURISTIC,
+            alarm.windowLengthMs
+        )
+    }
+
+    @Test
+    fun testScheduleBoundaryCheckAlarm_withoutExactPermission_schedulesInexactFallback() {
+        // Given - SCHEDULE_EXACT_ALARM not granted
+        ShadowAlarmManager.setCanScheduleExactAlarms(false)
+
+        // When - scheduling normally (no skip override)
+        AlarmScheduler.scheduleBoundaryCheckAlarm(context)
+
+        // Then - a fallback check alarm is still scheduled rather than silently dropped
+        val scheduledAlarms = shadowAlarmManager.scheduledAlarms
+        assertTrue("Boundary check fallback alarm should be scheduled", scheduledAlarms.isNotEmpty())
+        val alarm = scheduledAlarms.last()
+        assertEquals(AlarmManager.RTC_WAKEUP, alarm.getType())
+        assertTrue("Fallback alarm must wake during doze", alarm.isAllowWhileIdle)
+        assertEquals(
+            "Fallback alarm should be inexact (setAndAllowWhileIdle, not setExactAndAllowWhileIdle)",
+            ShadowAlarmManager.WINDOW_HEURISTIC,
+            alarm.windowLengthMs
+        )
+    }
 }

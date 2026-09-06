@@ -90,7 +90,7 @@ class StepCounterForegroundServiceInstrumentedTest {
     }
 
     @Test
-    fun testService_wakeLock_preventsDozeMode() = runBlocking {
+    fun testService_noContinuousWakeLockHeld() = runBlocking {
         // Given
         val intent = Intent(context, StepCounterForegroundService::class.java)
 
@@ -98,8 +98,11 @@ class StepCounterForegroundServiceInstrumentedTest {
         context.startForegroundService(intent)
 
         // Then
-        // The wake-lock should prevent doze mode
-        // This is difficult to test directly in an emulator/test environment
+        // The service must NOT hold the myhourly:StepCounterWakeLock continuously.
+        // A short-lived lock is acquired only around hour-boundary / missed-boundary work
+        // and auto-releases (WORK_WAKE_LOCK_TIMEOUT_MS), so the device can deep-sleep
+        // between hours. Verify with: adb shell dumpsys power | grep StepCounterWakeLock
+        // This is difficult to assert directly in an emulator/test environment.
     }
 
     @Test

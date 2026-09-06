@@ -50,6 +50,12 @@ class StepCounterForegroundService : android.app.Service() {
         const val CHECKPOINT_INTERVAL_MINUTES = 5L
         const val STARTUP_SYNC_TIMEOUT_MS = 15_000L
 
+        /**
+         * Timeout for the short-lived work wake lock. A stalled coroutine can never pin
+         * the CPU awake for longer than this because the lock auto-releases.
+         */
+        const val WORK_WAKE_LOCK_TIMEOUT_MS = 120_000L
+
         enum class SensorAction { NONE, FLUSH, RE_REGISTER }
 
         fun determineSensorAction(sensorAgeMs: Long, thresholdMs: Long, lastEventTimeMs: Long): SensorAction {
@@ -260,6 +266,7 @@ class StepCounterForegroundService : android.app.Service() {
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
+    @Volatile private var wakeLockEnabled: Boolean = StepPreferences.USE_WAKE_LOCK_DEFAULT
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private lateinit var sensorManager: com.example.myhourlystepcounterv2.sensor.StepSensorManager
     private lateinit var preferences: StepPreferences
@@ -300,6 +307,12 @@ class StepCounterForegroundService : android.app.Service() {
 
         scope.launch {
             preferences.hourlyStepGoal.collect { hourlyGoal = it }
+        }
+
+        // Mirror the wake-lock toggle into a volatile so the short-lived work locks can
+        // check it cheaply on whichever dispatcher the boundary work runs on.
+        scope.launch {
+            preferences.useWakeLock.collect { wakeLockEnabled = it }
         }
 
         // Get singleton sensor manager — may or may not be initialized by ViewModel
@@ -441,7 +454,10 @@ class StepCounterForegroundService : android.app.Service() {
             }
         }
 
-        // Observe flows and update notification / wake-lock accordingly
+        // Observe flows and update the notification.
+        // NOTE: No continuous wake lock is held here. When the device is asleep the
+        // notification simply goes stale; it is refreshed on the next CPU wake (alarm,
+        // sensor event delivery, screen-on) via this flow and the checkpoint loop.
         scope.launch {
             val currentHourCheckpointSteps = preferences.currentHourTimestamp
                 .flatMapLatest { currentHourTimestamp ->
@@ -452,9 +468,8 @@ class StepCounterForegroundService : android.app.Service() {
                 sensorManager.currentStepCount,
                 preferences.currentHourTimestamp,
                 currentHourCheckpointSteps,
-                preferences.useWakeLock,
                 notificationSyncing
-            ) { currentHourSteps, savedHourTimestamp, checkpointSteps, useWake, isSyncing ->
+            ) { currentHourSteps, savedHourTimestamp, checkpointSteps, isSyncing ->
                 android.util.Log.d("StepCounterFGSvc", "Live sensor: currentHourSteps=$currentHourSteps")
 
                 // Use wall-clock hour for DB exclusion to prevent overcount when
@@ -505,7 +520,6 @@ class StepCounterForegroundService : android.app.Service() {
                 StepNotificationState(
                     currentHourSteps = displayedCurrentHourSteps,
                     dailyTotal = dailyTotal,
-                    useWakeLock = useWake,
                     isSyncing = isSyncing,
                     timeline = timeline
                 )
@@ -524,9 +538,6 @@ class StepCounterForegroundService : android.app.Service() {
                 )
                 val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                 nm.notify(NOTIFICATION_ID, notification)
-
-                // Handle wake-lock
-                handleWakeLock(state.useWakeLock)
             }
         }
 
@@ -615,7 +626,6 @@ class StepCounterForegroundService : android.app.Service() {
     private data class StepNotificationState(
         val currentHourSteps: Int,
         val dailyTotal: Int,
-        val useWakeLock: Boolean,
         val isSyncing: Boolean,
         val timeline: TimelinePresentation
     )
@@ -709,26 +719,65 @@ class StepCounterForegroundService : android.app.Service() {
         }
     }
 
-    private fun handleWakeLock(enable: Boolean) {
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        if (enable) {
+    /**
+     * Acquire a short-lived partial wake lock for one unit of work (hour-boundary save,
+     * missed-boundary backfill). The lock auto-releases after [WORK_WAKE_LOCK_TIMEOUT_MS]
+     * so a stalled coroutine can never pin the CPU awake, and it is released explicitly
+     * as soon as the work finishes. Between work items no lock is held, so the device can
+     * deep-sleep normally.
+     *
+     * Only when the user's "wake lock" setting is enabled. If the lock is already held by
+     * another in-flight unit of work this call returns false — the caller shares the
+     * existing lock and must not release it.
+     *
+     * @return true if this call acquired the lock and is responsible for releasing it.
+     */
+    private fun acquireShortWakeLock(reason: String): Boolean {
+        if (!wakeLockEnabled) return false
+        return try {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
             if (wakeLock == null || wakeLock?.isHeld == false) {
                 wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "myhourly:StepCounterWakeLock").apply {
                     setReferenceCounted(false)
-                    acquire()
+                    acquire(WORK_WAKE_LOCK_TIMEOUT_MS)
                 }
+                android.util.Log.i(
+                    "StepCounterFGSvc",
+                    "Work wake-lock acquired ($reason, auto-release in ${WORK_WAKE_LOCK_TIMEOUT_MS / 1000}s)"
+                )
+                true
+            } else {
+                android.util.Log.v("StepCounterFGSvc", "Work wake-lock already held; sharing for ($reason)")
+                false
             }
-        } else {
-            wakeLock?.let {
-                if (it.isHeld) it.release()
-                wakeLock = null
+        } catch (e: Exception) {
+            android.util.Log.w("StepCounterFGSvc", "Failed to acquire work wake-lock ($reason)", e)
+            false
+        }
+    }
+
+    /**
+     * Release the short-lived work wake lock, but only if [acquired] is true (i.e. this
+     * call site acquired it). Prevents one work item from tearing down a lock another
+     * in-flight item is still relying on.
+     */
+    private fun releaseShortWakeLock(reason: String, acquired: Boolean) {
+        if (!acquired) return
+        wakeLock?.let {
+            if (it.isHeld) {
+                it.release()
+                android.util.Log.d("StepCounterFGSvc", "Work wake-lock released ($reason)")
             }
+            wakeLock = null
         }
     }
 
     private fun stopForegroundService() {
-        // Release wake-lock if held
-        handleWakeLock(false)
+        // Release work wake-lock if held
+        wakeLock?.let {
+            if (it.isHeld) it.release()
+            wakeLock = null
+        }
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -738,6 +787,7 @@ class StepCounterForegroundService : android.app.Service() {
      * This handles the case where user disabled permanent notification and later re-enabled it.
      */
     private suspend fun checkMissedHourBoundaries() {
+        val wakeLockAcquired = acquireShortWakeLock("missed-boundary check")
         try {
             // Calculate current hour timestamp (what we're about to process)
             val currentHourTimestamp = java.util.Calendar.getInstance().apply {
@@ -1001,6 +1051,8 @@ class StepCounterForegroundService : android.app.Service() {
             updateNotificationImmediately()
         } catch (e: Exception) {
             android.util.Log.e("StepCounterFGSvc", "Error checking missed hour boundaries", e)
+        } finally {
+            releaseShortWakeLock("missed-boundary check", wakeLockAcquired)
         }
     }
 
@@ -1009,6 +1061,7 @@ class StepCounterForegroundService : android.app.Service() {
      * Extracted from HourBoundaryReceiver for reuse in foreground service.
      */
     private suspend fun handleHourBoundary() {
+        val wakeLockAcquired = acquireShortWakeLock("hour boundary")
         try {
             // Calculate current hour timestamp (what we're about to process)
             val currentHourTimestamp = java.util.Calendar.getInstance().apply {
@@ -1213,6 +1266,8 @@ class StepCounterForegroundService : android.app.Service() {
             android.util.Log.d("StepCounterFGSvc", "Rescheduled boundary check alarm")
         } catch (e: Exception) {
             android.util.Log.e("StepCounterFGSvc", "Error processing hour boundary", e)
+        } finally {
+            releaseShortWakeLock("hour boundary", wakeLockAcquired)
         }
     }
 
@@ -1667,7 +1722,11 @@ class StepCounterForegroundService : android.app.Service() {
     override fun onDestroy() {
         super.onDestroy()
         hourBoundaryLoopActive = false  // Signal loop to stop
-        handleWakeLock(false)
+        // Release work wake-lock if held
+        wakeLock?.let {
+            if (it.isHeld) it.release()
+            wakeLock = null
+        }
         // Don't stop the singleton sensor - ViewModel may still be using it
         scope.cancel()
     }

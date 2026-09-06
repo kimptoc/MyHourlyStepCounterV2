@@ -129,7 +129,7 @@ The app uses **MVVM architecture with Repository pattern** in a single-activity 
    - `lastStartOfDay`: Midnight timestamp for day boundary detection
    - `lastOpenDate`: Timestamp for closure period detection
    - `permanentNotificationEnabled`: Toggle for persistent notification
-   - `useWakeLock`: Toggle for keeping processor awake
+   - `useWakeLock`: Toggle for a short-lived wake lock held only during hour-boundary/backfill processing (not continuous)
    - `reminderNotificationEnabled`: Toggle for step reminder notifications
 
 ### Sensor Layer
@@ -146,7 +146,7 @@ The app uses **MVVM architecture with Repository pattern** in a single-activity 
    - Updates notification in real-time with current hour and daily totals
    - Uses a high-importance persistent notification channel (`step_counter_channel_v4`) for better visibility
    - Handles hour boundary processing when app is in background
-   - Manages wake-lock based on user preferences
+   - Acquires a short-lived wake lock (auto-released after 2 min) only around hour-boundary/backfill work, never held continuously; the device can deep-sleep between hours
 
 10. **AlarmManager:**
    - **AlarmScheduler:** Schedules precise alarms for step reminders (XX:50) and hour boundaries (XX:00)
