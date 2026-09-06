@@ -333,6 +333,25 @@ class AlarmSchedulerTest {
     }
 
     @Test
+    fun testScheduleHourBoundaryAlarms_bootRecovery_withoutExactPermission_doesNotCrash() {
+        // Given - SCHEDULE_EXACT_ALARM not granted. BootReceiver schedules with
+        // skipPermissionCheck = true, so this must not crash with a SecurityException
+        // on Android 12+ (where setExactAndAllowWhileIdle throws without permission).
+        ShadowAlarmManager.setCanScheduleExactAlarms(false)
+
+        // When - scheduling the way BootReceiver does after boot/update
+        AlarmScheduler.scheduleHourBoundaryAlarms(context, skipPermissionCheck = true)
+
+        // Then - must not throw and must still schedule an alarm (exact here in Robolectric,
+        // inexact fallback on a real device where the exact call throws)
+        val scheduledAlarms = shadowAlarmManager.scheduledAlarms
+        assertTrue(
+            "Alarm should be scheduled even without exact-alarm permission",
+            scheduledAlarms.isNotEmpty()
+        )
+    }
+
+    @Test
     fun testScheduleBoundaryCheckAlarm_withoutExactPermission_schedulesInexactFallback() {
         // Given - SCHEDULE_EXACT_ALARM not granted
         ShadowAlarmManager.setCanScheduleExactAlarms(false)

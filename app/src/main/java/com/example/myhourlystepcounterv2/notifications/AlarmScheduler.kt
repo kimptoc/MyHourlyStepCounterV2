@@ -19,11 +19,12 @@ object AlarmScheduler {
     private const val TAG = "AlarmScheduler"
 
     /**
-     * True when exact alarms may be used (SCHEDULE_EXACT_ALARM granted, or explicitly
-     * overridden via [skipPermissionCheck]). Falls back to true below Android 12 where
-     * the permission does not exist.
+     * True when we should attempt an exact alarm: SCHEDULE_EXACT_ALARM granted, explicitly
+     * overridden via [skipPermissionCheck] (boot/update recovery), or below Android 12
+     * where the permission does not exist. Attempting exact is always safe because
+     * [scheduleWakeupAlarm] catches SecurityException and falls back to inexact.
      */
-    private fun canScheduleExactAlarms(context: Context, skipPermissionCheck: Boolean): Boolean {
+    private fun shouldAttemptExactAlarm(context: Context, skipPermissionCheck: Boolean): Boolean {
         if (skipPermissionCheck) return true
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
@@ -31,11 +32,12 @@ object AlarmScheduler {
     }
 
     /**
-     * Schedule a device-waking alarm. Uses setExactAndAllowWhileIdle when the app holds
-     * SCHEDULE_EXACT_ALARM (precise, e.g. an hour boundary). When exact alarms are not
-     * granted, falls back to setAndAllowWhileIdle so the alarm still fires during doze
-     * (possibly deferred) instead of being silently dropped — the WorkManager and
-     * missed-boundary backfill logic absorb the small delay.
+     * Schedule a device-waking alarm. Prefers setExactAndAllowWhileIdle for precise timing
+     * (e.g. an hour boundary). If SCHEDULE_EXACT_ALARM is not granted — including the
+     * boot/update recovery path that skips the permission check — this falls back to
+     * setAndAllowWhileIdle instead of throwing or silently doing nothing, so the alarm
+     * still fires during doze (possibly deferred). The WorkManager and missed-boundary
+     * backfill logic absorb the small delay.
      */
     private fun scheduleWakeupAlarm(
         context: Context,
@@ -45,16 +47,23 @@ object AlarmScheduler {
         description: String
     ) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        if (canScheduleExactAlarms(context, skipPermissionCheck)) {
-            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
-            android.util.Log.i(TAG, "$description scheduled (exact) at ${java.util.Date(triggerAtMillis)}")
-        } else {
-            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
-            android.util.Log.w(
-                TAG,
-                "$description scheduled (inexact fallback - exact alarm permission not granted) at ${java.util.Date(triggerAtMillis)}"
-            )
+        if (shouldAttemptExactAlarm(context, skipPermissionCheck)) {
+            try {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+                android.util.Log.i(TAG, "$description scheduled (exact) at ${java.util.Date(triggerAtMillis)}")
+                return
+            } catch (e: SecurityException) {
+                android.util.Log.w(
+                    TAG,
+                    "$description: exact alarm not permitted (${e.message}); using inexact fallback"
+                )
+            }
         }
+        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+        android.util.Log.w(
+            TAG,
+            "$description scheduled (inexact fallback - exact alarm permission not granted) at ${java.util.Date(triggerAtMillis)}"
+        )
     }
 
     /**

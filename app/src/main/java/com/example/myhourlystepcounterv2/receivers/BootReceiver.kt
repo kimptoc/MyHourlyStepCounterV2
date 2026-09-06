@@ -32,8 +32,9 @@ class BootReceiver(
                     val prefs = stepPreferences ?: StepPreferences(context.applicationContext)
                     val permanentNotificationEnabled = prefs.permanentNotificationEnabled.first()
                     val reminderEnabled = prefs.reminderNotificationEnabled.first()
-                    // Always bypass exact alarm permission check in boot/update recovery —
-                    // we're already inside the if-block that guarantees a system restart action.
+                    // Prefer exact alarms in boot/update recovery; AlarmScheduler falls
+                    // back to inexact if SCHEDULE_EXACT_ALARM is not granted, so this
+                    // never crashes boot scheduling.
                     if (reminderEnabled) {
                         com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleStepReminders(
                             context.applicationContext,
