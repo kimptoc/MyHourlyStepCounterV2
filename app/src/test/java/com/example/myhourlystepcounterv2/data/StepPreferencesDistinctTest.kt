@@ -2,11 +2,11 @@ package com.example.myhourlystepcounterv2.data
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import kotlinx.coroutines.flow.dropWhile
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
-import org.junit.Assert.assertNull
+import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -32,26 +32,32 @@ class StepPreferencesDistinctTest {
 
     @Test
     fun unrelatedWrites_doNotReemitCurrentHourTimestamp() = runBlocking {
-        val firstValue = preferences.currentHourTimestamp.first()
+        val emissions = mutableListOf<Long>()
+        val job = launch {
+            preferences.currentHourTimestamp.collect { emissions.add(it) }
+        }
+
+        // Subscribe before the writes so any spurious re-emission lands while we watch.
+        withTimeoutOrNull(2000L) {
+            while (emissions.isEmpty()) delay(5)
+        }
 
         // DataStore re-publishes the whole snapshot on every write. Before the fix,
         // currentHourTimestamp defaulted to a fresh System.currentTimeMillis() on each
-        // emission, so unrelated writes forced a new value downstream.
+        // emission, so these unrelated writes forced new values downstream.
         preferences.saveTotalStepsDevice(100)
         preferences.saveReminderSentThisHour(true)
         preferences.saveLastKnownBootCount(7)
 
-        // With distinctUntilChanged (and a stable 0L default) the flow never re-emits a
-        // different value, so this times out and returns null.
-        val differentEmission = withTimeoutOrNull(1000L) {
-            preferences.currentHourTimestamp
-                .dropWhile { it == firstValue }
-                .first()
-        }
+        // Give DataStore a bounded window to deliver any spurious re-emission.
+        delay(100)
 
-        assertNull(
+        job.cancelAndJoin()
+
+        assertEquals(
             "Unrelated preference writes must not re-emit currentHourTimestamp",
-            differentEmission
+            1,
+            emissions.size
         )
     }
 }
