@@ -44,14 +44,12 @@ class WorkWakeLockLedger(
 
     /**
      * Take a reference, taking the underlying lock if this is the first one. Returns the token
-     * that must be handed to [release]; the caller owns exactly this reference and no other.
+     * that must be handed to [release] — the caller owns exactly this reference and no other —
+     * or null if the reference was refused because its backstop could not be scheduled.
      */
-    fun acquire(reason: String): Long = synchronized(lock) {
+    fun acquire(reason: String): Long? = synchronized(lock) {
         val token = nextToken++
-        if (outstanding.isEmpty()) {
-            onFirstAcquire()
-        }
-        outstanding[token] = scope.launch {
+        val backstop = scope.launch {
             delay(timeoutMs)
             synchronized(lock) {
                 // Only fires if this reference is still outstanding: a normal release for this
@@ -62,6 +60,22 @@ class WorkWakeLockLedger(
                 }
             }
         }
+        if (backstop.isCancelled) {
+            // The scope is already cancelled (service tearing down), so this backstop will
+            // never fire. Taking the lock now could leave it held with nothing scheduled to
+            // drop it — the runaway wake lock this class exists to prevent — so refuse the
+            // reference instead. The caller gets a null token and simply runs without a lock.
+            return@synchronized null
+        }
+        if (outstanding.isEmpty()) {
+            try {
+                onFirstAcquire()
+            } catch (e: Throwable) {
+                backstop.cancel()
+                throw e
+            }
+        }
+        outstanding[token] = backstop
         token
     }
 

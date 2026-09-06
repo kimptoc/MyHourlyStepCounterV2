@@ -739,7 +739,8 @@ class StepCounterForegroundService : android.app.Service() {
      * (hour-boundary save, missed-boundary backfill), and return the token identifying it.
      * The caller must pass that token — and only that token — to [releaseShortWakeLock] when
      * the work finishes, normally in a `finally`. Returns null when the user has the setting
-     * off or the lock could not be taken; [releaseShortWakeLock] then does nothing.
+     * off, the lock could not be taken, or the service is tearing down; [releaseShortWakeLock]
+     * then does nothing and the work simply runs without a lock.
      *
      * Concurrent work items share one framework lock via [WorkWakeLockLedger]: it is taken on
      * the first outstanding reference and dropped when the last one retires, so a sibling can
@@ -763,10 +764,17 @@ class StepCounterForegroundService : android.app.Service() {
 
         return try {
             val token = wakeLockLedger.acquire(reason)
-            android.util.Log.i(
-                "StepCounterFGSvc",
-                "Work wake-lock acquired ($reason, refs=${wakeLockLedger.referenceCount})"
-            )
+            if (token == null) {
+                android.util.Log.w(
+                    "StepCounterFGSvc",
+                    "Work wake-lock refused, service scope is shutting down ($reason)"
+                )
+            } else {
+                android.util.Log.i(
+                    "StepCounterFGSvc",
+                    "Work wake-lock acquired ($reason, refs=${wakeLockLedger.referenceCount})"
+                )
+            }
             token
         } catch (e: Exception) {
             android.util.Log.w("StepCounterFGSvc", "Failed to acquire work wake-lock ($reason)", e)

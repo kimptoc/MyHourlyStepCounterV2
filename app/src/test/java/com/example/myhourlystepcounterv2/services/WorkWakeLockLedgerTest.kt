@@ -4,7 +4,9 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import kotlinx.coroutines.cancel
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -53,7 +55,7 @@ class WorkWakeLockLedgerTest {
         val lock = FakeLock()
         val ledger = ledgerWith(lock, this)
 
-        val token = ledger.acquire("hour boundary")
+        val token = ledger.acquire("hour boundary")!!
         assertTrue("lock must be held while work runs", lock.held)
 
         ledger.release(token)
@@ -68,8 +70,8 @@ class WorkWakeLockLedgerTest {
         val lock = FakeLock()
         val ledger = ledgerWith(lock, this)
 
-        val boundary = ledger.acquire("hour boundary")
-        val backfill = ledger.acquire("missed-boundary check")
+        val boundary = ledger.acquire("hour boundary")!!
+        val backfill = ledger.acquire("missed-boundary check")!!
         assertEquals(2, ledger.referenceCount)
         assertEquals("overlapping work must share one framework lock", 1, lock.acquireCount)
 
@@ -87,9 +89,9 @@ class WorkWakeLockLedgerTest {
         val ledger = ledgerWith(lock, this)
 
         // Backfill stalls; a boundary save starts a minute later and finishes normally.
-        val stalled = ledger.acquire("missed-boundary check")
+        val stalled = ledger.acquire("missed-boundary check")!!
         advanceTimeBy(60_000)
-        val live = ledger.acquire("hour boundary")
+        val live = ledger.acquire("hour boundary")!!
 
         // The stalled item's own backstop fires. It must retire only that reference.
         advanceTimeBy(60_001)
@@ -111,13 +113,13 @@ class WorkWakeLockLedgerTest {
         val lock = FakeLock()
         val ledger = ledgerWith(lock, this)
 
-        val stalled = ledger.acquire("missed-boundary check")
+        val stalled = ledger.acquire("missed-boundary check")!!
         advanceTimeBy(timeoutMs + 1)
         assertFalse("stalled work must not pin the CPU past the timeout", lock.held)
         assertEquals(0, ledger.referenceCount)
 
         // A new generation of work takes a fresh lock.
-        val next = ledger.acquire("hour boundary")
+        val next = ledger.acquire("hour boundary")!!
         assertTrue(lock.held)
 
         // The stalled item finally finishes and releases its stale token: it must not touch
@@ -135,12 +137,12 @@ class WorkWakeLockLedgerTest {
         val lock = FakeLock()
         val ledger = ledgerWith(lock, this)
 
-        val first = ledger.acquire("hour boundary")
+        val first = ledger.acquire("hour boundary")!!
         ledger.release(first)
         assertFalse(lock.held)
 
         // A later work item must survive the first item's would-be backstop deadline.
-        val second = ledger.acquire("missed-boundary check")
+        val second = ledger.acquire("missed-boundary check")!!
         advanceTimeBy(timeoutMs - 1)
         assertTrue("a completed item's timer must not release a newer lock", lock.held)
         assertEquals(1, ledger.referenceCount)
@@ -156,7 +158,7 @@ class WorkWakeLockLedgerTest {
         val lock = FakeLock()
         val ledger = ledgerWith(lock, this)
 
-        val first = ledger.acquire("hour boundary")
+        val first = ledger.acquire("hour boundary")!!
         // A second item starts just before the first one's deadline; it must still get a full
         // timeout of its own rather than inheriting the first item's near-expired clock.
         advanceTimeBy(timeoutMs - 1_000)
@@ -188,10 +190,30 @@ class WorkWakeLockLedgerTest {
         assertEquals(0, ledger.referenceCount)
 
         // Cancelled backstops must not fire afterwards against a later lock.
-        val later = ledger.acquire("hour boundary")
+        val later = ledger.acquire("hour boundary")!!
         advanceTimeBy(timeoutMs - 1)
         assertTrue(lock.held)
         ledger.release(later)
         assertFalse(lock.held)
+    }
+
+    @Test
+    fun acquireAfterScopeCancelled_refusesRatherThanHoldingAnUnreleasableLock() = runTest {
+        val lock = FakeLock()
+        val scope = kotlinx.coroutines.CoroutineScope(
+            kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Unconfined
+        )
+        val ledger = ledgerWith(lock, scope)
+
+        // Service teardown cancels the scope, so no backstop scheduled afterwards can ever
+        // fire. Taking the lock here would leave it held with nothing to drop it — exactly
+        // the runaway wake lock this whole mechanism replaced.
+        scope.cancel()
+
+        val token = ledger.acquire("hour boundary")
+        assertNull("a reference with no live backstop must be refused", token)
+        assertFalse("no lock may be held once nothing can release it", lock.held)
+        assertEquals(0, ledger.referenceCount)
+        assertEquals(0, lock.acquireCount)
     }
 }
