@@ -718,10 +718,10 @@ class StepCounterForegroundService : android.app.Service() {
      * Acquire a short-lived partial wake lock for one unit of work (hour-boundary save,
      * missed-boundary backfill). The lock is reference-counted, so concurrent work items
      * share it and each matching [releaseShortWakeLock] releases one reference; it is
-     * never torn down mid-work by a sibling coroutine. Each acquire also schedules an
-     * auto-release after [WORK_WAKE_LOCK_TIMEOUT_MS], so a stalled coroutine can never
-     * pin the CPU awake indefinitely. Between work items no lock is held, so the device
-     * can deep-sleep normally.
+     * never torn down mid-work by a sibling coroutine. A single backstop per wake-lock
+     * instance auto-releases it after [WORK_WAKE_LOCK_TIMEOUT_MS], so a stalled coroutine
+     * can never pin the CPU awake indefinitely. Between work items no lock is held, so the
+     * device can deep-sleep normally.
      *
      * The wake-lock setting is read from DataStore at acquire time rather than from a
      * default-seeded cache, so an early boundary check honors the user's stored
@@ -746,20 +746,46 @@ class StepCounterForegroundService : android.app.Service() {
 
                 if (wakeLockReferences == 0) {
                     lock.acquire()
+                    // One backstop per wake-lock instance, scheduled only when the lock
+                    // first comes into existence. It captures the exact instance it guards
+                    // and is a no-op once that instance is no longer current, so a stale
+                    // timer can never release a newer lock held by a sibling work item.
+                    scheduleWakeLockBackstop(lock, reason)
                 }
                 wakeLockReferences++
                 android.util.Log.i(
                     "StepCounterFGSvc",
                     "Work wake-lock acquired ($reason, refs=$wakeLockReferences)"
                 )
-
-                // Backstop: this reference can never hold the CPU awake longer than the timeout.
-                scope.launch {
-                    delay(WORK_WAKE_LOCK_TIMEOUT_MS)
-                    releaseShortWakeLock("auto-timeout ($reason)")
-                }
             } catch (e: Exception) {
                 android.util.Log.w("StepCounterFGSvc", "Failed to acquire work wake-lock ($reason)", e)
+            }
+        }
+    }
+
+    /**
+     * Schedule the auto-release backstop for a wake-lock instance. Runs once per lock
+     * lifetime: if the instance is still the current one when it fires (i.e. work is still
+     * holding it after [WORK_WAKE_LOCK_TIMEOUT_MS], typically a stalled coroutine), the
+     * whole lock is force-released so the CPU can never stay awake indefinitely.
+     */
+    private fun scheduleWakeLockBackstop(lock: PowerManager.WakeLock, reason: String) {
+        scope.launch {
+            delay(WORK_WAKE_LOCK_TIMEOUT_MS)
+            synchronized(wakeLockMutex) {
+                if (wakeLock === lock) {
+                    wakeLockReferences = 0
+                    if (lock.isHeld) {
+                        lock.release()
+                        android.util.Log.w(
+                            "StepCounterFGSvc",
+                            "Work wake-lock backstop fired after ${WORK_WAKE_LOCK_TIMEOUT_MS / 1000}s ($reason)"
+                        )
+                    }
+                    wakeLock = null
+                }
+                // Otherwise this lock instance was already released normally; the timer is
+                // stale and must not touch the newer lock.
             }
         }
     }
