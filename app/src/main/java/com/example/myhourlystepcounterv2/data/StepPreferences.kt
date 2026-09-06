@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.myhourlystepcounterv2.StepTrackerConfig
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
 import org.json.JSONArray
@@ -68,66 +69,86 @@ class StepPreferences(private val context: Context) {
 
     val hourStartStepCount: Flow<Int> = context.dataStore.data
         .map { preferences -> preferences[HOUR_START_STEP_COUNT] ?: 0 }
+        .distinctUntilChanged()
 
     val currentHourTimestamp: Flow<Long> = context.dataStore.data
-        .map { preferences -> preferences[CURRENT_HOUR_TIMESTAMP] ?: System.currentTimeMillis() }
+        .map { preferences -> preferences[CURRENT_HOUR_TIMESTAMP] ?: 0L }
+        .distinctUntilChanged()
 
     val totalStepsDevice: Flow<Int> = context.dataStore.data
         .map { preferences -> preferences[TOTAL_STEPS_DEVICE] ?: 0 }
+        .distinctUntilChanged()
 
     val lastStartOfDay: Flow<Long> = context.dataStore.data
         .map { preferences -> preferences[LAST_START_OF_DAY] ?: 0 }
+        .distinctUntilChanged()
 
     val lastOpenDate: Flow<Long> = context.dataStore.data
         .map { preferences -> preferences[LAST_OPEN_DATE] ?: 0 }
+        .distinctUntilChanged()
 
     val lastDistributionTime: Flow<Long> = context.dataStore.data
         .map { preferences -> preferences[LAST_DISTRIBUTION_TIME] ?: 0 }
+        .distinctUntilChanged()
 
     // New flows for permanent notification and wake-lock
     val permanentNotificationEnabled: Flow<Boolean> = context.dataStore.data
         .map { preferences -> preferences[PERMANENT_NOTIFICATION_ENABLED] ?: PERMANENT_NOTIFICATION_DEFAULT }
+        .distinctUntilChanged()
 
     val useWakeLock: Flow<Boolean> = context.dataStore.data
         .map { preferences -> preferences[USE_WAKE_LOCK] ?: USE_WAKE_LOCK_DEFAULT }
+        .distinctUntilChanged()
 
     val reminderNotificationEnabled: Flow<Boolean> = context.dataStore.data
         .map { preferences -> preferences[REMINDER_NOTIFICATION_ENABLED] ?: REMINDER_NOTIFICATION_DEFAULT }
+        .distinctUntilChanged()
 
     val hourlyStepGoal: Flow<Int> = context.dataStore.data
         .map { preferences ->
             (preferences[HOURLY_STEP_GOAL] ?: HOURLY_STEP_GOAL_DEFAULT).coerceIn(1, StepTrackerConfig.MAX_STEPS_PER_HOUR)
         }
+        .distinctUntilChanged()
 
     val lastReminderNotificationTime: Flow<Long> = context.dataStore.data
         .map { preferences -> preferences[LAST_REMINDER_NOTIFICATION_TIME] ?: 0L }
+        .distinctUntilChanged()
 
     val reminderSentThisHour: Flow<Boolean> = context.dataStore.data
         .map { preferences -> preferences[REMINDER_SENT_THIS_HOUR] ?: false }
+        .distinctUntilChanged()
 
     val achievementSentThisHour: Flow<Boolean> = context.dataStore.data
         .map { preferences -> preferences[ACHIEVEMENT_SENT_THIS_HOUR] ?: false }
+        .distinctUntilChanged()
 
     val lastSecondReminderTime: Flow<Long> = context.dataStore.data
         .map { preferences -> preferences[LAST_SECOND_REMINDER_TIME] ?: 0L }
+        .distinctUntilChanged()
 
     val secondReminderSentThisHour: Flow<Boolean> = context.dataStore.data
         .map { preferences -> preferences[SECOND_REMINDER_SENT_THIS_HOUR] ?: false }
+        .distinctUntilChanged()
 
     val lastKnownBootCount: Flow<Int> = context.dataStore.data
         .map { preferences -> preferences[LAST_KNOWN_BOOT_COUNT] ?: -1 }
+        .distinctUntilChanged()
 
     val currentHourPreRebootOffset: Flow<Int> = context.dataStore.data
         .map { preferences -> preferences[CURRENT_HOUR_PRE_REBOOT_OFFSET] ?: 0 }
+        .distinctUntilChanged()
 
     val lastProcessedBoundaryTimestamp: Flow<Long> = context.dataStore.data
         .map { preferences -> preferences[LAST_PROCESSED_BOUNDARY_TIMESTAMP] ?: 0L }
+        .distinctUntilChanged()
 
     val lastProcessedRangeStart: Flow<Long> = context.dataStore.data
         .map { preferences -> preferences[LAST_PROCESSED_RANGE_START] ?: 0L }
+        .distinctUntilChanged()
 
     val lastProcessedRangeEnd: Flow<Long> = context.dataStore.data
         .map { preferences -> preferences[LAST_PROCESSED_RANGE_END] ?: 0L }
+        .distinctUntilChanged()
 
     suspend fun savePermanentNotificationEnabled(enabled: Boolean) {
         context.dataStore.updateData { preferences ->

@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.isActive
@@ -310,6 +311,13 @@ class StepCounterForegroundService : android.app.Service() {
         val elapsedHours: Int
     )
 
+    private data class NotificationInputs(
+        val currentHourSteps: Int,
+        val savedHourTimestamp: Long,
+        val checkpointSteps: Int?,
+        val isSyncing: Boolean
+    )
+
     @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
     override fun onCreate() {
         super.onCreate()
@@ -485,8 +493,10 @@ class StepCounterForegroundService : android.app.Service() {
                 currentHourCheckpointSteps,
                 notificationSyncing
             ) { currentHourSteps, savedHourTimestamp, checkpointSteps, isSyncing ->
-                android.util.Log.d("StepCounterFGSvc", "Live sensor: currentHourSteps=$currentHourSteps")
-
+                NotificationInputs(currentHourSteps, savedHourTimestamp, checkpointSteps, isSyncing)
+            }
+            .sample(3.seconds)  // THROTTLE cheap inputs first so expensive Room queries run at most once per 3s
+            .map { inputs ->
                 // Use wall-clock hour for DB exclusion to prevent overcount when
                 // saved currentHourTimestamp is stale (e.g. hour boundary not yet processed).
                 // A stale saved timestamp would fail to exclude the checkpoint row for
@@ -505,20 +515,20 @@ class StepCounterForegroundService : android.app.Service() {
                     set(java.util.Calendar.MILLISECOND, 0)
                 }.timeInMillis
 
-                if (savedHourTimestamp > 0 && wallClockHourTimestamp != savedHourTimestamp) {
+                if (inputs.savedHourTimestamp > 0 && wallClockHourTimestamp != inputs.savedHourTimestamp) {
                     android.util.Log.w("StepCounterFGSvc",
                         "Notification daily query: using wall-clock hour ${java.util.Date(wallClockHourTimestamp)} " +
-                            "instead of stale saved ${java.util.Date(savedHourTimestamp)}")
+                            "instead of stale saved ${java.util.Date(inputs.savedHourTimestamp)}")
                 }
 
                 // Get daily total from database (excluding current hour by wall-clock)
-                val checkpoint = checkpointSteps ?: 0
-                val displayedCurrentHourSteps = maxOf(currentHourSteps, checkpoint)
-                if (displayedCurrentHourSteps != currentHourSteps) {
+                val checkpoint = inputs.checkpointSteps ?: 0
+                val displayedCurrentHourSteps = maxOf(inputs.currentHourSteps, checkpoint)
+                if (displayedCurrentHourSteps != inputs.currentHourSteps) {
                     android.util.Log.w(
                         "StepCounterFGSvc",
                         "Notification current hour checkpoint is ahead of live sensor: " +
-                            "sensor=$currentHourSteps, checkpoint=$checkpoint. Displaying checkpointed value."
+                            "sensor=${inputs.currentHourSteps}, checkpoint=$checkpoint. Displaying checkpointed value."
                     )
                 }
                 val dbTotal = repository.getTotalStepsForDayExcludingCurrentHour(startOfDay, wallClockHourTimestamp).first() ?: 0
@@ -528,18 +538,16 @@ class StepCounterForegroundService : android.app.Service() {
                     now = java.util.Calendar.getInstance(),
                     dayHistory = dayHistory,
                     currentHourSteps = displayedCurrentHourSteps,
-                    isSyncing = isSyncing
+                    isSyncing = inputs.isSyncing
                 )
 
-                android.util.Log.d("StepCounterFGSvc", "Calculated: dbTotal=$dbTotal, currentHour=$displayedCurrentHourSteps, daily=$dailyTotal")
                 StepNotificationState(
                     currentHourSteps = displayedCurrentHourSteps,
                     dailyTotal = dailyTotal,
-                    isSyncing = isSyncing,
+                    isSyncing = inputs.isSyncing,
                     timeline = timeline
                 )
             }
-            .sample(3.seconds)  // THROTTLE: Only emit once every 3 seconds to prevent notification rate limiting
             .collect { state ->
                 logTimestampStaleness()
                 android.util.Log.d("StepCounterFGSvc", "Notification update (throttled 3s): currentHour=${state.currentHourSteps}, daily=${state.dailyTotal}, syncing=${state.isSyncing}")
