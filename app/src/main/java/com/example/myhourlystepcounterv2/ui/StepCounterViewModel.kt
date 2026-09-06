@@ -4,6 +4,7 @@ package com.example.myhourlystepcounterv2.ui
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.myhourlystepcounterv2.BuildConfig
 import com.example.myhourlystepcounterv2.PermissionHelper
 import com.example.myhourlystepcounterv2.StepTrackerConfig
 import com.example.myhourlystepcounterv2.data.StepDatabase
@@ -14,12 +15,13 @@ import com.example.myhourlystepcounterv2.resolveKnownTotalForInitialization
 import com.example.myhourlystepcounterv2.sensor.StepSensorManager
 import com.example.myhourlystepcounterv2.worker.WorkManagerScheduler
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -304,26 +306,16 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
 
         // Observe daily steps (database + current hour)
         viewModelScope.launch {
-            combine(
-                preferences.lastStartOfDay,
-                preferences.currentHourTimestamp,
-                _hourlySteps
-            ) { storedStartOfDay, currentHourTimestamp, currentHourSteps ->
-                val effectiveStartOfDay = if (storedStartOfDay > 0) storedStartOfDay else getStartOfDay()
-                Triple(effectiveStartOfDay, currentHourTimestamp, currentHourSteps)
-            }.flatMapLatest { (effectiveStartOfDay, currentHourTimestamp, currentHourSteps) ->
-                // Use new query that excludes current hour to avoid double-counting
-                repository.getTotalStepsForDayExcludingCurrentHour(effectiveStartOfDay, currentHourTimestamp)
-                    .combine(flowOf(currentHourSteps)) { dbTotal, hourSteps ->
-                        val finalTotal = (dbTotal ?: 0) + hourSteps
-                        android.util.Log.d(
-                            "StepCounter",
-                            "Daily total calculated: dbTotal=$dbTotal (excluding current hour $currentHourTimestamp=${java.util.Date(currentHourTimestamp)}), " +
-                                    "currentHourSteps=$hourSteps, final=$finalTotal, startOfDay=${java.util.Date(effectiveStartOfDay)}"
-                        )
-                        finalTotal
-                    }
-            }.collect { total ->
+            dailyStepsFlow(
+                lastStartOfDay = preferences.lastStartOfDay,
+                currentHourTimestamp = preferences.currentHourTimestamp,
+                hourlySteps = _hourlySteps,
+                repository = repository,
+                fallbackStartOfDay = ::getStartOfDay
+            ).collect { total ->
+                if (BuildConfig.DEBUG) {
+                    android.util.Log.d("StepCounter", "Daily total calculated: $total")
+                }
                 _dailySteps.value = total
             }
         }
@@ -340,11 +332,13 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                 // Query now excludes the current hour
                 repository.getStepsForDay(effectiveStartOfDay, currentHourTimestamp)
             }.collect { steps ->
-                android.util.Log.d(
-                    "StepCounter",
-                    "History loaded (past hours): ${steps.size} entries - " +
-                            steps.map { "${java.util.Date(it.timestamp)}: ${it.stepCount}" }.joinToString(", ")
-                )
+                if (BuildConfig.DEBUG) {
+                    android.util.Log.d(
+                        "StepCounter",
+                        "History loaded (past hours): ${steps.size} entries - " +
+                                steps.map { "${java.util.Date(it.timestamp)}: ${it.stepCount}" }.joinToString(", ")
+                    )
+                }
                 _dayHistory.value = steps
             }
         }
@@ -676,4 +670,30 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
         }
         repository.saveHourlySteps(timestamp, steps)
     }
+}
+
+/**
+ * Builds the daily-step-count flow: the sum of the persisted steps for today (excluding the
+ * current hour) plus the live current-hour steps.
+ *
+ * The Room query is keyed only on the start-of-day and current-hour timestamps, so it is
+ * re-subscribed only when a day or hour boundary is crossed. Live step changes are combined
+ * downstream as cheap arithmetic instead of tearing down and re-running the database query.
+ */
+internal fun dailyStepsFlow(
+    lastStartOfDay: Flow<Long>,
+    currentHourTimestamp: Flow<Long>,
+    hourlySteps: Flow<Int>,
+    repository: StepRepository,
+    fallbackStartOfDay: () -> Long
+): Flow<Int> {
+    return combine(lastStartOfDay, currentHourTimestamp) { storedStartOfDay, currentHourTimestamp ->
+        val effectiveStartOfDay = if (storedStartOfDay > 0) storedStartOfDay else fallbackStartOfDay()
+        effectiveStartOfDay to currentHourTimestamp
+    }
+        .distinctUntilChanged()
+        .flatMapLatest { (effectiveStartOfDay, currentHourTimestamp) ->
+            repository.getTotalStepsForDayExcludingCurrentHour(effectiveStartOfDay, currentHourTimestamp)
+        }
+        .combine(hourlySteps) { dbTotal, hourSteps -> (dbTotal ?: 0) + hourSteps }
 }
