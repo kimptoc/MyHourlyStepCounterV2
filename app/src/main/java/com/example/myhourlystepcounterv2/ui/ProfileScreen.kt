@@ -369,7 +369,7 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "Keep processor awake (wake-lock)",
+                        text = "Wake lock for hourly processing",
                         modifier = Modifier.weight(1f)
                     )
                     androidx.compose.material3.Switch(
@@ -378,20 +378,19 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
                     )
                 }
                 Text(
-                    text = "Prevents the device from entering deep sleep to ensure accurate step counting",
+                    text = "Held only while each hour's steps are saved, then released. The device can sleep normally between hours.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = 8.dp, top = 4.dp)
                 )
             }
 
-            // Battery warning for wake-lock
-            if (wakeEnabled) {
+            if (!wakeEnabled) {
                 Text(
-                    text = "⚠️ Enabling wake-lock may significantly impact battery life",
+                    text = "Hourly saves will rely on alarm wake-ups and may be deferred while the device is in deep sleep. Daily totals stay accurate either way.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(start = 8.dp, top = 8.dp)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 8.dp, top = 4.dp)
                 )
             }
         }

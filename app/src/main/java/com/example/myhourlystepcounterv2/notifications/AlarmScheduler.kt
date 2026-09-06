@@ -16,24 +16,61 @@ object AlarmScheduler {
     // Check every 15 minutes for missed boundaries
     private const val BOUNDARY_CHECK_INTERVAL_MS = 15 * 60 * 1000L
 
+    private const val TAG = "AlarmScheduler"
+
+    /**
+     * True when we should attempt an exact alarm: SCHEDULE_EXACT_ALARM granted, explicitly
+     * overridden via [skipPermissionCheck] (boot/update recovery), or below Android 12
+     * where the permission does not exist. Attempting exact is always safe because
+     * [scheduleWakeupAlarm] catches SecurityException and falls back to inexact.
+     */
+    private fun shouldAttemptExactAlarm(context: Context, skipPermissionCheck: Boolean): Boolean {
+        if (skipPermissionCheck) return true
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        return alarmManager.canScheduleExactAlarms()
+    }
+
+    /**
+     * Schedule a device-waking alarm. Prefers setExactAndAllowWhileIdle for precise timing
+     * (e.g. an hour boundary). If SCHEDULE_EXACT_ALARM is not granted — including the
+     * boot/update recovery path that skips the permission check — this falls back to
+     * setAndAllowWhileIdle instead of throwing or silently doing nothing, so the alarm
+     * still fires during doze (possibly deferred). The WorkManager and missed-boundary
+     * backfill logic absorb the small delay.
+     */
+    private fun scheduleWakeupAlarm(
+        context: Context,
+        skipPermissionCheck: Boolean,
+        triggerAtMillis: Long,
+        pendingIntent: PendingIntent,
+        description: String
+    ) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        if (shouldAttemptExactAlarm(context, skipPermissionCheck)) {
+            try {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+                android.util.Log.i(TAG, "$description scheduled (exact) at ${java.util.Date(triggerAtMillis)}")
+                return
+            } catch (e: SecurityException) {
+                android.util.Log.w(
+                    TAG,
+                    "$description: exact alarm not permitted (${e.message}); using inexact fallback"
+                )
+            }
+        }
+        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+        android.util.Log.w(
+            TAG,
+            "$description scheduled (inexact fallback - exact alarm permission not granted) at ${java.util.Date(triggerAtMillis)}"
+        )
+    }
+
     /**
      * Schedule exact alarm at 50 minutes past the current/next hour (XX:50)
      * Uses setExactAndAllowWhileIdle for precise timing even during doze mode
      */
     fun scheduleStepReminders(context: Context, skipPermissionCheck: Boolean = false) {
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-
-        // Check if SCHEDULE_EXACT_ALARM permission is granted (Android 12+)
-        if (!skipPermissionCheck && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (!alarmManager.canScheduleExactAlarms()) {
-                android.util.Log.w(
-                    "AlarmScheduler",
-                    "Cannot schedule exact alarms - permission not granted"
-                )
-                return
-            }
-        }
-
         // Create explicit intent to target the receiver directly
         // With exported="false" in manifest, this prevents duplicate deliveries
         val intent = Intent(context, StepReminderReceiver::class.java).apply {
@@ -60,15 +97,12 @@ object AlarmScheduler {
 
         // Use setExactAndAllowWhileIdle for precise timing even during doze mode
         // Receiver will reschedule the next alarm after execution
-        alarmManager.setExactAndAllowWhileIdle(
-            AlarmManager.RTC_WAKEUP,
-            calendar.timeInMillis,
-            pendingIntent
-        )
-
-        android.util.Log.i(
-            "AlarmScheduler",
-            "Step reminder scheduled (exact) at ${calendar.time} (:50)"
+        scheduleWakeupAlarm(
+            context = context,
+            skipPermissionCheck = skipPermissionCheck,
+            triggerAtMillis = calendar.timeInMillis,
+            pendingIntent = pendingIntent,
+            description = "Step reminder (:50)"
         )
     }
 
@@ -103,19 +137,6 @@ object AlarmScheduler {
      * Uses setExactAndAllowWhileIdle for precise timing even during doze mode
      */
     fun scheduleSecondStepReminder(context: Context, skipPermissionCheck: Boolean = false) {
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-
-        // Check if SCHEDULE_EXACT_ALARM permission is granted (Android 12+)
-        if (!skipPermissionCheck && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (!alarmManager.canScheduleExactAlarms()) {
-                android.util.Log.w(
-                    "AlarmScheduler",
-                    "Cannot schedule exact alarms - permission not granted"
-                )
-                return
-            }
-        }
-
         // Create explicit intent to target the receiver directly
         // Use same receiver but different request code
         val intent = Intent(context, StepReminderReceiver::class.java).apply {
@@ -142,15 +163,12 @@ object AlarmScheduler {
 
         // Use setExactAndAllowWhileIdle for precise timing even during doze mode
         // Receiver will reschedule the next alarm after execution
-        alarmManager.setExactAndAllowWhileIdle(
-            AlarmManager.RTC_WAKEUP,
-            calendar.timeInMillis,
-            pendingIntent
-        )
-
-        android.util.Log.i(
-            "AlarmScheduler",
-            "Second step reminder scheduled (exact) at ${calendar.time} (:55)"
+        scheduleWakeupAlarm(
+            context = context,
+            skipPermissionCheck = skipPermissionCheck,
+            triggerAtMillis = calendar.timeInMillis,
+            pendingIntent = pendingIntent,
+            description = "Second step reminder (:55)"
         )
     }
 
@@ -160,14 +178,6 @@ object AlarmScheduler {
      * waking the device every hour overnight.
      */
     fun scheduleStepRemindersNextWindow(context: Context, skipPermissionCheck: Boolean = false) {
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        if (!skipPermissionCheck && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (!alarmManager.canScheduleExactAlarms()) {
-                android.util.Log.w("AlarmScheduler", "Cannot schedule exact alarms - permission not granted")
-                return
-            }
-        }
-
         val intent = Intent(context, StepReminderReceiver::class.java).apply {
             action = StepReminderReceiver.ACTION_STEP_REMINDER
         }
@@ -184,8 +194,13 @@ object AlarmScheduler {
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
-        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pendingIntent)
-        android.util.Log.i("AlarmScheduler", "Step reminder scheduled (next window) at ${calendar.time}")
+        scheduleWakeupAlarm(
+            context = context,
+            skipPermissionCheck = skipPermissionCheck,
+            triggerAtMillis = calendar.timeInMillis,
+            pendingIntent = pendingIntent,
+            description = "Step reminder (next window 08:50)"
+        )
     }
 
     /**
@@ -193,14 +208,6 @@ object AlarmScheduler {
      * Used when currently outside the 8am–10pm quiet hours window.
      */
     fun scheduleSecondStepReminderNextWindow(context: Context, skipPermissionCheck: Boolean = false) {
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        if (!skipPermissionCheck && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (!alarmManager.canScheduleExactAlarms()) {
-                android.util.Log.w("AlarmScheduler", "Cannot schedule exact alarms - permission not granted")
-                return
-            }
-        }
-
         val intent = Intent(context, StepReminderReceiver::class.java).apply {
             action = StepReminderReceiver.ACTION_SECOND_STEP_REMINDER
         }
@@ -217,8 +224,13 @@ object AlarmScheduler {
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
-        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pendingIntent)
-        android.util.Log.i("AlarmScheduler", "Second step reminder scheduled (next window) at ${calendar.time}")
+        scheduleWakeupAlarm(
+            context = context,
+            skipPermissionCheck = skipPermissionCheck,
+            triggerAtMillis = calendar.timeInMillis,
+            pendingIntent = pendingIntent,
+            description = "Second step reminder (next window 08:55)"
+        )
     }
 
     /**
@@ -252,19 +264,6 @@ object AlarmScheduler {
      * This ensures the notification resets even when the app is backgrounded
      */
     fun scheduleHourBoundaryAlarms(context: Context, skipPermissionCheck: Boolean = false) {
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-
-        // Check if SCHEDULE_EXACT_ALARM permission is granted (Android 12+)
-        if (!skipPermissionCheck && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (!alarmManager.canScheduleExactAlarms()) {
-                android.util.Log.w(
-                    "AlarmScheduler",
-                    "Cannot schedule exact alarms - permission not granted"
-                )
-                return
-            }
-        }
-
         // Create explicit intent to target the receiver directly
         // With exported="false" in manifest, this prevents duplicate deliveries
         val intent = Intent(context, HourBoundaryReceiver::class.java).apply {
@@ -290,15 +289,12 @@ object AlarmScheduler {
 
         // Use setExactAndAllowWhileIdle for precise timing even during doze mode
         // Receiver will reschedule the next alarm after execution
-        alarmManager.setExactAndAllowWhileIdle(
-            AlarmManager.RTC_WAKEUP,
-            calendar.timeInMillis,
-            pendingIntent
-        )
-
-        android.util.Log.i(
-            "AlarmScheduler",
-            "Hour boundary alarm scheduled (exact) at ${calendar.time} (:00)"
+        scheduleWakeupAlarm(
+            context = context,
+            skipPermissionCheck = skipPermissionCheck,
+            triggerAtMillis = calendar.timeInMillis,
+            pendingIntent = pendingIntent,
+            description = "Hour boundary alarm (:00)"
         )
     }
 
@@ -333,19 +329,6 @@ object AlarmScheduler {
      * Uses setExactAndAllowWhileIdle for precise timing even during doze mode
      */
     fun scheduleBoundaryCheckAlarm(context: Context, skipPermissionCheck: Boolean = false) {
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-
-        // Check if SCHEDULE_EXACT_ALARM permission is granted (Android 12+)
-        if (!skipPermissionCheck && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (!alarmManager.canScheduleExactAlarms()) {
-                android.util.Log.w(
-                    "AlarmScheduler",
-                    "Cannot schedule exact alarms - permission not granted"
-                )
-                return
-            }
-        }
-
         // Create explicit intent to target the receiver directly
         val intent = Intent(context, HourBoundaryReceiver::class.java).apply {
             action = "com.example.myhourlystepcounterv2.ACTION_BOUNDARY_CHECK"
@@ -363,15 +346,12 @@ object AlarmScheduler {
 
         // Use setExactAndAllowWhileIdle for precise timing even during doze mode
         // Receiver will reschedule the next check after execution
-        alarmManager.setExactAndAllowWhileIdle(
-            AlarmManager.RTC_WAKEUP,
-            triggerTime,
-            pendingIntent
-        )
-
-        android.util.Log.i(
-            "AlarmScheduler",
-            "Boundary check alarm scheduled (exact) at ${java.util.Date(triggerTime)} (+15 min)"
+        scheduleWakeupAlarm(
+            context = context,
+            skipPermissionCheck = skipPermissionCheck,
+            triggerAtMillis = triggerTime,
+            pendingIntent = pendingIntent,
+            description = "Boundary check alarm (+15 min)"
         )
     }
 
