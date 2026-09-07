@@ -1,10 +1,12 @@
 package com.example.myhourlystepcounterv2.ui
 
 import com.example.myhourlystepcounterv2.data.StepRepository
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -40,19 +42,19 @@ class DailyStepsFlowTest {
         val results = mutableListOf<Int>()
         val job = launch { dailyFlow.toList(results) }
 
-        runCurrent()
+        advanceUntilIdle()
         assertEquals("Initial collection should subscribe once", 1, subscriptions)
 
         hourlySteps.value = 1
         hourlySteps.value = 2
         hourlySteps.value = 3
-        runCurrent()
+        advanceUntilIdle()
 
         assertEquals("Step emissions must not re-subscribe the Room query", 1, subscriptions)
         assertEquals("Daily total should add live steps to the persisted total", 103, results.last())
 
         currentHourTimestamp.value = 3_000L
-        runCurrent()
+        advanceUntilIdle()
         assertEquals("An hour boundary should re-subscribe the Room query once", 2, subscriptions)
 
         job.cancelAndJoin()
