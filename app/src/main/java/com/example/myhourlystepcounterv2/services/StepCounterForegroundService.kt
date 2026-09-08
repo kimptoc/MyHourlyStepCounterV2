@@ -276,13 +276,23 @@ class StepCounterForegroundService : android.app.Service() {
          * row, so the stale value stands and the boundary is marked processed anyway. The
          * boundary handler recomputes the hour from its baseline instead.
          *
-         * Deliberately NOT gated on the sensor having reported in this process. A cold start
-         * (alarm-driven or START_STICKY restart) seeds `isInitialized` from DataStore without
-         * ever setting `lastSensorEventTimeMs`, which only [StepSensorManager.onSensorChanged]
-         * writes — so requiring a delivered event would refuse the hand-off for exactly the
-         * restarts this PR exists to serve, dropping them into the backfill that loses the
-         * hour. The handler does its own FIFO flush, falls back to the saved device total,
-         * and runs [shouldBreakCounterContinuity] before trusting anything.
+         * Deliberately NOT gated on the sensor having reported in this process, because
+         * `lastSensorEventTimeMs` is written only by [StepSensorManager.onSensorChanged] while
+         * `markInitialized()` seeds `isInitialized` from DataStore — so requiring a delivered
+         * event would refuse the hand-off whenever the first callback has not landed yet. The
+         * handler does its own FIFO flush, falls back to the saved device total, and runs
+         * [shouldBreakCounterContinuity] before trusting anything.
+         *
+         * KNOWN GAP — this predicate does not by itself rescue a cold start. On a process
+         * restart `initializeSensorFromPreferences()` is launched from `onCreate` ahead of
+         * `onStartCommand`, and its different-hour branch calls `saveHourData()` with the new
+         * hour, so by the time the missed-boundary check reads `currentHourTimestamp` there is
+         * usually no gap left to see and [resolveBoundaryAction] returns
+         * [BoundaryAction.NONE] — the completed hour keeps its partial checkpoint row and its
+         * tail steps are absorbed into the new baseline. That advance-without-closing predates
+         * this hand-off and needs a startup-sequencing fix, not a change here. What this path
+         * does reliably serve is the service that stayed alive through deep sleep, where the
+         * initializer returns early on `isInitialized` and never advances anything.
          *
          * What it does require: a counter to work from at all — either source, since the
          * handler falls back to the saved total — and no reboot. After a reboot the sensor

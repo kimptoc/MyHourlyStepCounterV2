@@ -31,10 +31,13 @@ class HourlySwitchReconciliationTest {
     }
 
     @Test
-    fun shouldDelegateOrdinaryHourTransition_handsOffOnAColdStartBeforeTheSensorHasReported() {
-        // Regression: an alarm-driven / START_STICKY restart has no sensor event yet, so the
-        // in-memory total is 0 and only the saved total is real. That is precisely the restart
-        // this fix serves — refusing it here drops the hour into the backfill that loses it.
+    fun shouldDelegateOrdinaryHourTransition_acceptsASavedTotalWhenTheSensorIsStillSilent() {
+        // The predicate must not require a delivered sensor event: when only the saved total
+        // is real the handler can still close the hour from it.
+        //
+        // Scope: this pins the predicate alone. It does NOT show a cold start reaching this
+        // code — initializeSensorFromPreferences() usually advances currentHourTimestamp
+        // first, so the check resolves NONE. See the KDoc's KNOWN GAP note.
         assertTrue(
             shouldDelegateOrdinaryHourTransition(
                 hoursDifference = 1L,
@@ -265,7 +268,9 @@ class HourlySwitchReconciliationTest {
     }
 
     @Test
-    fun resolveBoundaryAction_coldStartWithoutASensorEventStillHandsOff() {
+    fun resolveBoundaryAction_handsOffWhenOnlyTheSavedTotalIsReal() {
+        // Same scope caveat as the predicate test above: this fixes the decision, not the
+        // startup ordering that decides whether the decision is ever reached.
         assertEquals(
             BoundaryAction.DELEGATE_TO_HANDLER,
             action(currentDeviceTotal = 0, savedDeviceTotal = 60_325)
