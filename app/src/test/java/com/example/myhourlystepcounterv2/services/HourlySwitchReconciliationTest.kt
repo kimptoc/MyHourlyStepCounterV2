@@ -24,7 +24,22 @@ class HourlySwitchReconciliationTest {
             shouldDelegateOrdinaryHourTransition(
                 hoursDifference = 1L,
                 currentDeviceTotal = 60_325,
-                sensorHasReported = true,
+                savedDeviceTotal = 60_000,
+                rebootDetected = false
+            )
+        )
+    }
+
+    @Test
+    fun shouldDelegateOrdinaryHourTransition_handsOffOnAColdStartBeforeTheSensorHasReported() {
+        // Regression: an alarm-driven / START_STICKY restart has no sensor event yet, so the
+        // in-memory total is 0 and only the saved total is real. That is precisely the restart
+        // this fix serves — refusing it here drops the hour into the backfill that loses it.
+        assertTrue(
+            shouldDelegateOrdinaryHourTransition(
+                hoursDifference = 1L,
+                currentDeviceTotal = 0,
+                savedDeviceTotal = 60_325,
                 rebootDetected = false
             )
         )
@@ -36,7 +51,7 @@ class HourlySwitchReconciliationTest {
             shouldDelegateOrdinaryHourTransition(
                 hoursDifference = 2L,
                 currentDeviceTotal = 60_325,
-                sensorHasReported = true,
+                savedDeviceTotal = 60_000,
                 rebootDetected = false
             )
         )
@@ -44,7 +59,7 @@ class HourlySwitchReconciliationTest {
             shouldDelegateOrdinaryHourTransition(
                 hoursDifference = 7L,
                 currentDeviceTotal = 60_325,
-                sensorHasReported = true,
+                savedDeviceTotal = 60_000,
                 rebootDetected = false
             )
         )
@@ -56,34 +71,20 @@ class HourlySwitchReconciliationTest {
             shouldDelegateOrdinaryHourTransition(
                 hoursDifference = 0L,
                 currentDeviceTotal = 60_325,
-                sensorHasReported = true,
+                savedDeviceTotal = 60_000,
                 rebootDetected = false
             )
         )
     }
 
     @Test
-    fun shouldDelegateOrdinaryHourTransition_refusesADataStoreSeededTotal() {
-        // A cold start seeds lastKnownStepCount from DataStore before any sensor event, so a
-        // non-zero total on its own is not evidence the sensor has reported.
-        assertFalse(
-            shouldDelegateOrdinaryHourTransition(
-                hoursDifference = 1L,
-                currentDeviceTotal = 60_325,
-                sensorHasReported = false,
-                rebootDetected = false
-            )
-        )
-    }
-
-    @Test
-    fun shouldDelegateOrdinaryHourTransition_refusesWhenSensorHasNotReportedYet() {
-        // Backfill's post-reboot guards must stay in charge when there is no live counter.
+    fun shouldDelegateOrdinaryHourTransition_refusesWhenThereIsNoCounterAtAll() {
+        // Nothing to close from, and backfill's skip-and-retry is the better behaviour.
         assertFalse(
             shouldDelegateOrdinaryHourTransition(
                 hoursDifference = 1L,
                 currentDeviceTotal = 0,
-                sensorHasReported = true,
+                savedDeviceTotal = 0,
                 rebootDetected = false
             )
         )
@@ -91,11 +92,13 @@ class HourlySwitchReconciliationTest {
 
     @Test
     fun shouldDelegateOrdinaryHourTransition_refusesAfterAReboot() {
+        // Sensor counter is back at 0 while the saved total is a large pre-reboot value;
+        // the handler would set a wildly wrong baseline. Backfill's guards own this case.
         assertFalse(
             shouldDelegateOrdinaryHourTransition(
                 hoursDifference = 1L,
                 currentDeviceTotal = 60_325,
-                sensorHasReported = true,
+                savedDeviceTotal = 60_000,
                 rebootDetected = true
             )
         )
@@ -243,22 +246,30 @@ class HourlySwitchReconciliationTest {
         savedHourTimestamp: Long = previousHour,
         effectiveLastProcessed: Long = previousHour,
         currentDeviceTotal: Int = 60_325,
-        sensorHasReported: Boolean = true,
+        savedDeviceTotal: Int = 60_000,
         rebootDetected: Boolean = false
     ) = resolveBoundaryAction(
         currentHourTimestamp = currentHour,
         savedHourTimestamp = savedHourTimestamp,
         effectiveLastProcessed = effectiveLastProcessed,
         currentDeviceTotal = currentDeviceTotal,
-        sensorHasReported = sensorHasReported,
+        savedDeviceTotal = savedDeviceTotal,
         rebootDetected = rebootDetected
     )
 
     @Test
     fun resolveBoundaryAction_theProductionScenario_handsTheHourToTheBoundaryHandler() {
-        // Saved hour is the hour that just completed, sensor has reported, no reboot: the
-        // 09:00 -> 10:00 switch that backfill was closing and losing the hour's steps on.
+        // Saved hour is the hour that just completed: the 09:00 -> 10:00 switch that backfill
+        // was closing and losing the hour's steps on.
         assertEquals(BoundaryAction.DELEGATE_TO_HANDLER, action())
+    }
+
+    @Test
+    fun resolveBoundaryAction_coldStartWithoutASensorEventStillHandsOff() {
+        assertEquals(
+            BoundaryAction.DELEGATE_TO_HANDLER,
+            action(currentDeviceTotal = 0, savedDeviceTotal = 60_325)
+        )
     }
 
     @Test
@@ -277,10 +288,11 @@ class HourlySwitchReconciliationTest {
 
     @Test
     fun resolveBoundaryAction_oneHourGapFallsBackToBackfillWhenTheCounterIsNotTrustworthy() {
-        // Backfill's own post-reboot guards must stay in charge of these.
-        assertEquals(BoundaryAction.BACKFILL, action(sensorHasReported = false))
-        assertEquals(BoundaryAction.BACKFILL, action(currentDeviceTotal = 0))
         assertEquals(BoundaryAction.BACKFILL, action(rebootDetected = true))
+        assertEquals(
+            BoundaryAction.BACKFILL,
+            action(currentDeviceTotal = 0, savedDeviceTotal = 0)
+        )
     }
 
     @Test
@@ -296,13 +308,31 @@ class HourlySwitchReconciliationTest {
     }
 
     @Test
-    fun resolveBoundaryAction_neverBackfillsAnEmptyRange() {
-        // rangeEnd < rangeStart was a late guard inside the backfill body; a decision of
-        // BACKFILL must always imply at least one whole hour to write.
-        var cursor = currentHour - hourMs + 1
-        while (cursor < currentHour) {
-            assertEquals(BoundaryAction.NONE, action(savedHourTimestamp = cursor))
-            cursor += 60_000L
+    fun resolveBoundaryAction_subHourGapIsNothingToClose() {
+        // Saved timestamp inside the current hour: no boundary has been crossed.
+        assertEquals(BoundaryAction.NONE, action(savedHourTimestamp = currentHour - 1_000L))
+        assertEquals(BoundaryAction.NONE, action(savedHourTimestamp = currentHour - hourMs + 1))
+    }
+
+    @Test
+    fun resolveBoundaryAction_backfillAlwaysHasAWholeHourToWrite() {
+        // The property the removed `rangeEnd < rangeStart` guard was standing in for:
+        // a BACKFILL decision must imply savedHourTimestamp <= currentHour - 1h, so
+        // rangeEnd >= rangeStart. Swept across and past the boundary, both counter
+        // trustworthiness cases, so it fences the implication rather than one input.
+        var saved = currentHour - 5 * hourMs
+        while (saved <= currentHour + hourMs) {
+            for (reboot in listOf(false, true)) {
+                if (action(savedHourTimestamp = saved, rebootDetected = reboot) ==
+                    BoundaryAction.BACKFILL
+                ) {
+                    assertTrue(
+                        "BACKFILL with an empty range at saved=$saved (reboot=$reboot)",
+                        saved <= currentHour - hourMs
+                    )
+                }
+            }
+            saved += 7 * 60_000L
         }
     }
 }

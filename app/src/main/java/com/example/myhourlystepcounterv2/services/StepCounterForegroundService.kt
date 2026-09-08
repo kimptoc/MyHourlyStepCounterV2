@@ -271,32 +271,34 @@ class StepCounterForegroundService : android.app.Service() {
          *
          * A saved hour timestamp exactly one hour behind the current hour is no gap at all —
          * it is the hour that just completed. Backfill cannot close it correctly: it still
-         * carries the in-progress checkpoint row written mid-hour, and backfill treats any
-         * stored row as final, so the hour's real total is never written and the hour is then
-         * marked processed. The boundary handler recomputes it from the hour baseline instead.
+         * carries the in-progress checkpoint row written mid-hour, and without a device-total
+         * snapshot bracketing the hour's tail [resolveBackfillHourSteps] cannot raise that
+         * row, so the stale value stands and the boundary is marked processed anyway. The
+         * boundary handler recomputes the hour from its baseline instead.
          *
-         * The hand-off needs a counter that came from the sensor, so it requires
-         * [sensorHasReported] — a non-zero [currentDeviceTotal] alone proves nothing, because
-         * a cold start seeds the in-memory total from DataStore before the sensor has
-         * delivered anything. It is also refused when a reboot was detected: the boundary
-         * handler would reset the hour baseline from a stale saved total, which is exactly
-         * what the backfill path's own post-reboot guards exist to avoid.
+         * Deliberately NOT gated on the sensor having reported in this process. A cold start
+         * (alarm-driven or START_STICKY restart) seeds `isInitialized` from DataStore without
+         * ever setting `lastSensorEventTimeMs`, which only [StepSensorManager.onSensorChanged]
+         * writes — so requiring a delivered event would refuse the hand-off for exactly the
+         * restarts this PR exists to serve, dropping them into the backfill that loses the
+         * hour. The handler does its own FIFO flush, falls back to the saved device total,
+         * and runs [shouldBreakCounterContinuity] before trusting anything.
          *
-         * This does not require the reading to be *recent*. At an hour boundary reached out
-         * of deep sleep the last event is routinely minutes old — that is the normal case
-         * this hand-off exists to serve — and the boundary handler flushes the sensor FIFO
-         * itself before reading the total.
+         * What it does require: a counter to work from at all — either source, since the
+         * handler falls back to the saved total — and no reboot. After a reboot the sensor
+         * counter has reset to 0 while the saved total is a large pre-reboot value, so the
+         * handler would set a wildly wrong hour baseline; that case belongs to the backfill
+         * path's own post-reboot guards.
          */
         fun shouldDelegateOrdinaryHourTransition(
             hoursDifference: Long,
             currentDeviceTotal: Int,
-            sensorHasReported: Boolean,
+            savedDeviceTotal: Int,
             rebootDetected: Boolean
         ): Boolean {
-            return hoursDifference == 1L &&
-                currentDeviceTotal > 0 &&
-                sensorHasReported &&
-                !rebootDetected
+            if (hoursDifference != 1L) return false
+            if (rebootDetected) return false
+            return maxOf(currentDeviceTotal, savedDeviceTotal) > 0
         }
 
         /** What a missed-boundary check should do about the hour it is looking at. */
@@ -307,7 +309,10 @@ class StepCounterForegroundService : android.app.Service() {
             /** The ordinary hourly switch — [shouldDelegateOrdinaryHourTransition]. */
             DELEGATE_TO_HANDLER,
 
-            /** A real gap of missed boundaries; run the backfill. */
+            /**
+             * Run the backfill: a real gap of missed boundaries, or a single-hour gap the
+             * hand-off refused (reboot, or no usable counter from either source).
+             */
             BACKFILL
         }
 
@@ -317,13 +322,17 @@ class StepCounterForegroundService : android.app.Service() {
          * then the ordinary-switch hand-off, and only then backfill. Delegation is decided
          * here — before the caller claims a backfill range — so a hand-off can never consume
          * a range claim, and the arms cannot be reordered without this decision table failing.
+         *
+         * A [BoundaryAction.BACKFILL] result always implies a non-empty range: it is only
+         * reachable with `hoursDifference >= 1`, which by integer division means
+         * `savedHourTimestamp <= currentHourTimestamp - 1h`, i.e. `rangeEnd >= rangeStart`.
          */
         fun resolveBoundaryAction(
             currentHourTimestamp: Long,
             savedHourTimestamp: Long,
             effectiveLastProcessed: Long,
             currentDeviceTotal: Int,
-            sensorHasReported: Boolean,
+            savedDeviceTotal: Int,
             rebootDetected: Boolean
         ): BoundaryAction {
             if (currentHourTimestamp <= effectiveLastProcessed) return BoundaryAction.NONE
@@ -332,11 +341,10 @@ class StepCounterForegroundService : android.app.Service() {
             }
             val hoursDifference = (currentHourTimestamp - savedHourTimestamp) / (60 * 60 * 1000)
             if (hoursDifference <= 0) return BoundaryAction.NONE
-            if (currentHourTimestamp - (60 * 60 * 1000) < savedHourTimestamp) return BoundaryAction.NONE
             return if (shouldDelegateOrdinaryHourTransition(
                     hoursDifference = hoursDifference,
                     currentDeviceTotal = currentDeviceTotal,
-                    sensorHasReported = sensorHasReported,
+                    savedDeviceTotal = savedDeviceTotal,
                     rebootDetected = rebootDetected
                 )
             ) {
@@ -344,26 +352,6 @@ class StepCounterForegroundService : android.app.Service() {
             } else {
                 BoundaryAction.BACKFILL
             }
-        }
-
-        /**
-         * Reconcile the recomputed hour total with the in-hour count the user was actually
-         * shown (persistent notification, goal-achieved alert). The displayed count is
-         * monotonic and includes the pre-reboot offset, so it can legitimately sit above a
-         * bare device-total delta; persisting the lower value is what makes a timeline
-         * marker contradict the "goal achieved" notification for the same hour. When counter
-         * continuity is broken the displayed value is not trustworthy (post-reboot counter,
-         * adjusted baseline), so the computed value stands on its own.
-         */
-        fun reconcileBoundarySaveWithDisplay(
-            computedSteps: Int,
-            displayedSteps: Int,
-            continuityBroken: Boolean,
-            maxStepsPerHour: Int
-        ): Int {
-            val safeComputed = computedSteps.coerceIn(0, maxStepsPerHour)
-            if (continuityBroken) return safeComputed
-            return maxOf(safeComputed, maxOf(0, displayedSteps)).coerceAtMost(maxStepsPerHour)
         }
 
         /**
@@ -964,18 +952,15 @@ class StepCounterForegroundService : android.app.Service() {
             val lastProcessed = preferences.lastProcessedBoundaryTimestamp.first()
             val effectiveLastProcessed = maxOf(lastProcessed, lastProcessedBoundaryTimestamp)
 
-            // A non-zero in-memory total is not evidence the sensor has spoken: a cold start
-            // seeds it from DataStore before any event arrives. Freshness is deliberately not
-            // required — after deep sleep the last event is routinely minutes old, and the
-            // boundary handler flushes the FIFO itself.
-            val sensorStateNow = sensorManager.sensorState.value
-            val sensorHasReported = sensorStateNow.isInitialized && sensorStateNow.lastSensorEventTimeMs > 0L
+            // Both counter sources are offered, because the boundary handler falls back to
+            // the saved total when the sensor has not reported in this process yet — which is
+            // the normal state moments after an alarm-driven or START_STICKY restart.
             val action = resolveBoundaryAction(
                 currentHourTimestamp = currentHourTimestamp,
                 savedHourTimestamp = savedHourTimestamp,
                 effectiveLastProcessed = effectiveLastProcessed,
                 currentDeviceTotal = sensorManager.getCurrentTotalSteps(),
-                sensorHasReported = sensorHasReported,
+                savedDeviceTotal = preferences.totalStepsDevice.first(),
                 rebootDetected = isDeviceRebootDetected(
                     currentBootCount = getCurrentBootCount(),
                     savedBootCount = preferences.lastKnownBootCount.first()
@@ -1023,8 +1008,11 @@ class StepCounterForegroundService : android.app.Service() {
 
             android.util.Log.w(
                 "StepCounterFGSvc",
-                "Service restart detected: missed $hoursDifference hour boundaries. " +
-                        "Backfill range: ${java.util.Date(rangeStart)} -> ${java.util.Date(rangeEnd)}"
+                (if (hoursDifference == 1L) {
+                    "Single-hour gap the hand-off refused (reboot, or no usable counter). "
+                } else {
+                    "Service restart detected: missed $hoursDifference hour boundaries. "
+                }) + "Backfill range: ${java.util.Date(rangeStart)} -> ${java.util.Date(rangeEnd)}"
             )
 
             // Flush sensor FIFO before reading device total for backfill
