@@ -290,9 +290,10 @@ class StepCounterForegroundService : android.app.Service() {
          * usually no gap left to see and [resolveBoundaryAction] returns
          * [BoundaryAction.NONE] — the completed hour keeps its partial checkpoint row and its
          * tail steps are absorbed into the new baseline. That advance-without-closing predates
-         * this hand-off and needs a startup-sequencing fix, not a change here. What this path
-         * does reliably serve is the service that stayed alive through deep sleep, where the
-         * initializer returns early on `isInitialized` and never advances anything.
+         * this hand-off and needs a startup-sequencing fix, not a change here; it is tracked
+         * as issue #25. What this path does reliably serve is the service that stayed alive
+         * through deep sleep, where the initializer returns early on `isInitialized` and never
+         * advances anything.
          *
          * What it does require: a counter to work from at all — either source, since the
          * handler falls back to the saved total — and no reboot. After a reboot the sensor
@@ -983,8 +984,10 @@ class StepCounterForegroundService : android.app.Service() {
             val effectiveLastProcessed = maxOf(lastProcessed, lastProcessedBoundaryTimestamp)
 
             // Both counter sources are offered, because the boundary handler falls back to
-            // the saved total when the sensor has not reported in this process yet — which is
-            // the normal state moments after an alarm-driven or START_STICKY restart.
+            // the saved total when the sensor has not reported in this process yet. That does
+            // not make this path the one that rescues a process restart — see the KNOWN GAP
+            // on shouldDelegateOrdinaryHourTransition and issue #25: on a cold start the hour
+            // has usually been advanced already, so this resolves NONE.
             val action = resolveBoundaryAction(
                 currentHourTimestamp = currentHourTimestamp,
                 savedHourTimestamp = savedHourTimestamp,
