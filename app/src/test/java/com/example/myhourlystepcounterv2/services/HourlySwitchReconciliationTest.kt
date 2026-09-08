@@ -1,6 +1,8 @@
 package com.example.myhourlystepcounterv2.services
 
 import com.example.myhourlystepcounterv2.StepTrackerConfig
+import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.BoundaryAction
+import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.resolveBoundaryAction
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.shouldDelegateOrdinaryHourTransition
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.reconcileBoundarySaveWithDisplay
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.resolveBackfillHourSteps
@@ -22,6 +24,7 @@ class HourlySwitchReconciliationTest {
             shouldDelegateOrdinaryHourTransition(
                 hoursDifference = 1L,
                 currentDeviceTotal = 60_325,
+                sensorHasReported = true,
                 rebootDetected = false
             )
         )
@@ -33,6 +36,7 @@ class HourlySwitchReconciliationTest {
             shouldDelegateOrdinaryHourTransition(
                 hoursDifference = 2L,
                 currentDeviceTotal = 60_325,
+                sensorHasReported = true,
                 rebootDetected = false
             )
         )
@@ -40,6 +44,7 @@ class HourlySwitchReconciliationTest {
             shouldDelegateOrdinaryHourTransition(
                 hoursDifference = 7L,
                 currentDeviceTotal = 60_325,
+                sensorHasReported = true,
                 rebootDetected = false
             )
         )
@@ -51,6 +56,21 @@ class HourlySwitchReconciliationTest {
             shouldDelegateOrdinaryHourTransition(
                 hoursDifference = 0L,
                 currentDeviceTotal = 60_325,
+                sensorHasReported = true,
+                rebootDetected = false
+            )
+        )
+    }
+
+    @Test
+    fun shouldDelegateOrdinaryHourTransition_refusesADataStoreSeededTotal() {
+        // A cold start seeds lastKnownStepCount from DataStore before any sensor event, so a
+        // non-zero total on its own is not evidence the sensor has reported.
+        assertFalse(
+            shouldDelegateOrdinaryHourTransition(
+                hoursDifference = 1L,
+                currentDeviceTotal = 60_325,
+                sensorHasReported = false,
                 rebootDetected = false
             )
         )
@@ -63,6 +83,7 @@ class HourlySwitchReconciliationTest {
             shouldDelegateOrdinaryHourTransition(
                 hoursDifference = 1L,
                 currentDeviceTotal = 0,
+                sensorHasReported = true,
                 rebootDetected = false
             )
         )
@@ -74,6 +95,7 @@ class HourlySwitchReconciliationTest {
             shouldDelegateOrdinaryHourTransition(
                 hoursDifference = 1L,
                 currentDeviceTotal = 60_325,
+                sensorHasReported = true,
                 rebootDetected = true
             )
         )
@@ -209,5 +231,78 @@ class HourlySwitchReconciliationTest {
         )
 
         assertEquals(StepTrackerConfig.MAX_STEPS_PER_HOUR, steps)
+    }
+
+    // --- resolveBoundaryAction: the ordering that actually broke ---
+
+    private val hourMs = 60L * 60L * 1000L
+    private val currentHour = 1_780_034_400_000L
+    private val previousHour = currentHour - hourMs
+
+    private fun action(
+        savedHourTimestamp: Long = previousHour,
+        effectiveLastProcessed: Long = previousHour,
+        currentDeviceTotal: Int = 60_325,
+        sensorHasReported: Boolean = true,
+        rebootDetected: Boolean = false
+    ) = resolveBoundaryAction(
+        currentHourTimestamp = currentHour,
+        savedHourTimestamp = savedHourTimestamp,
+        effectiveLastProcessed = effectiveLastProcessed,
+        currentDeviceTotal = currentDeviceTotal,
+        sensorHasReported = sensorHasReported,
+        rebootDetected = rebootDetected
+    )
+
+    @Test
+    fun resolveBoundaryAction_theProductionScenario_handsTheHourToTheBoundaryHandler() {
+        // Saved hour is the hour that just completed, sensor has reported, no reboot: the
+        // 09:00 -> 10:00 switch that backfill was closing and losing the hour's steps on.
+        assertEquals(BoundaryAction.DELEGATE_TO_HANDLER, action())
+    }
+
+    @Test
+    fun resolveBoundaryAction_dedupeWinsOverEverythingElse() {
+        // Already processed this hour — no hand-off and no backfill, whatever else is true.
+        assertEquals(BoundaryAction.NONE, action(effectiveLastProcessed = currentHour))
+    }
+
+    @Test
+    fun resolveBoundaryAction_realGapBackfills() {
+        assertEquals(
+            BoundaryAction.BACKFILL,
+            action(savedHourTimestamp = currentHour - 4 * hourMs)
+        )
+    }
+
+    @Test
+    fun resolveBoundaryAction_oneHourGapFallsBackToBackfillWhenTheCounterIsNotTrustworthy() {
+        // Backfill's own post-reboot guards must stay in charge of these.
+        assertEquals(BoundaryAction.BACKFILL, action(sensorHasReported = false))
+        assertEquals(BoundaryAction.BACKFILL, action(currentDeviceTotal = 0))
+        assertEquals(BoundaryAction.BACKFILL, action(rebootDetected = true))
+    }
+
+    @Test
+    fun resolveBoundaryAction_noSavedHourIsNothingToClose() {
+        assertEquals(BoundaryAction.NONE, action(savedHourTimestamp = 0L))
+        assertEquals(BoundaryAction.NONE, action(savedHourTimestamp = -1L))
+    }
+
+    @Test
+    fun resolveBoundaryAction_savedHourAtOrAheadOfCurrentIsNothingToClose() {
+        assertEquals(BoundaryAction.NONE, action(savedHourTimestamp = currentHour))
+        assertEquals(BoundaryAction.NONE, action(savedHourTimestamp = currentHour + hourMs))
+    }
+
+    @Test
+    fun resolveBoundaryAction_neverBackfillsAnEmptyRange() {
+        // rangeEnd < rangeStart was a late guard inside the backfill body; a decision of
+        // BACKFILL must always imply at least one whole hour to write.
+        var cursor = currentHour - hourMs + 1
+        while (cursor < currentHour) {
+            assertEquals(BoundaryAction.NONE, action(savedHourTimestamp = cursor))
+            cursor += 60_000L
+        }
     }
 }

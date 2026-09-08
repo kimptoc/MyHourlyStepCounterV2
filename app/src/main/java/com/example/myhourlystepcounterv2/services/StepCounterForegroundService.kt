@@ -275,17 +275,75 @@ class StepCounterForegroundService : android.app.Service() {
          * stored row as final, so the hour's real total is never written and the hour is then
          * marked processed. The boundary handler recomputes it from the hour baseline instead.
          *
-         * The hand-off needs a trustworthy absolute counter, so it is refused when the sensor
-         * has not reported yet ([currentDeviceTotal] == 0) or a reboot was detected: the
-         * boundary handler would reset the hour baseline from a stale saved total, which is
-         * exactly what the backfill path's own post-reboot guards exist to avoid.
+         * The hand-off needs a counter that came from the sensor, so it requires
+         * [sensorHasReported] — a non-zero [currentDeviceTotal] alone proves nothing, because
+         * a cold start seeds the in-memory total from DataStore before the sensor has
+         * delivered anything. It is also refused when a reboot was detected: the boundary
+         * handler would reset the hour baseline from a stale saved total, which is exactly
+         * what the backfill path's own post-reboot guards exist to avoid.
+         *
+         * This does not require the reading to be *recent*. At an hour boundary reached out
+         * of deep sleep the last event is routinely minutes old — that is the normal case
+         * this hand-off exists to serve — and the boundary handler flushes the sensor FIFO
+         * itself before reading the total.
          */
         fun shouldDelegateOrdinaryHourTransition(
             hoursDifference: Long,
             currentDeviceTotal: Int,
+            sensorHasReported: Boolean,
             rebootDetected: Boolean
         ): Boolean {
-            return hoursDifference == 1L && currentDeviceTotal > 0 && !rebootDetected
+            return hoursDifference == 1L &&
+                currentDeviceTotal > 0 &&
+                sensorHasReported &&
+                !rebootDetected
+        }
+
+        /** What a missed-boundary check should do about the hour it is looking at. */
+        enum class BoundaryAction {
+            /** Nothing to close: already processed, no saved hour, or no gap yet. */
+            NONE,
+
+            /** The ordinary hourly switch — [shouldDelegateOrdinaryHourTransition]. */
+            DELEGATE_TO_HANDLER,
+
+            /** A real gap of missed boundaries; run the backfill. */
+            BACKFILL
+        }
+
+        /**
+         * The single decision a missed-boundary check makes, kept whole and pure so the
+         * ordering is testable: dedupe first, then the saved-hour and gap validity checks,
+         * then the ordinary-switch hand-off, and only then backfill. Delegation is decided
+         * here — before the caller claims a backfill range — so a hand-off can never consume
+         * a range claim, and the arms cannot be reordered without this decision table failing.
+         */
+        fun resolveBoundaryAction(
+            currentHourTimestamp: Long,
+            savedHourTimestamp: Long,
+            effectiveLastProcessed: Long,
+            currentDeviceTotal: Int,
+            sensorHasReported: Boolean,
+            rebootDetected: Boolean
+        ): BoundaryAction {
+            if (currentHourTimestamp <= effectiveLastProcessed) return BoundaryAction.NONE
+            if (savedHourTimestamp <= 0 || savedHourTimestamp >= currentHourTimestamp) {
+                return BoundaryAction.NONE
+            }
+            val hoursDifference = (currentHourTimestamp - savedHourTimestamp) / (60 * 60 * 1000)
+            if (hoursDifference <= 0) return BoundaryAction.NONE
+            if (currentHourTimestamp - (60 * 60 * 1000) < savedHourTimestamp) return BoundaryAction.NONE
+            return if (shouldDelegateOrdinaryHourTransition(
+                    hoursDifference = hoursDifference,
+                    currentDeviceTotal = currentDeviceTotal,
+                    sensorHasReported = sensorHasReported,
+                    rebootDetected = rebootDetected
+                )
+            ) {
+                BoundaryAction.DELEGATE_TO_HANDLER
+            } else {
+                BoundaryAction.BACKFILL
+            }
         }
 
         /**
@@ -906,58 +964,53 @@ class StepCounterForegroundService : android.app.Service() {
             val lastProcessed = preferences.lastProcessedBoundaryTimestamp.first()
             val effectiveLastProcessed = maxOf(lastProcessed, lastProcessedBoundaryTimestamp)
 
-            // Deduplication: Skip if THIS hour was already processed
-            if (currentHourTimestamp <= effectiveLastProcessed) {
-                android.util.Log.d(
-                    "StepCounterFGSvc",
-                    "checkMissedHourBoundaries: Current hour $currentHourTimestamp already processed (effectiveLast=$effectiveLastProcessed), skipping"
+            // A non-zero in-memory total is not evidence the sensor has spoken: a cold start
+            // seeds it from DataStore before any event arrives. Freshness is deliberately not
+            // required — after deep sleep the last event is routinely minutes old, and the
+            // boundary handler flushes the FIFO itself.
+            val sensorStateNow = sensorManager.sensorState.value
+            val sensorHasReported = sensorStateNow.isInitialized && sensorStateNow.lastSensorEventTimeMs > 0L
+            val action = resolveBoundaryAction(
+                currentHourTimestamp = currentHourTimestamp,
+                savedHourTimestamp = savedHourTimestamp,
+                effectiveLastProcessed = effectiveLastProcessed,
+                currentDeviceTotal = sensorManager.getCurrentTotalSteps(),
+                sensorHasReported = sensorHasReported,
+                rebootDetected = isDeviceRebootDetected(
+                    currentBootCount = getCurrentBootCount(),
+                    savedBootCount = preferences.lastKnownBootCount.first()
                 )
-                return
-            }
+            )
 
-            if (savedHourTimestamp <= 0 || savedHourTimestamp >= currentHourTimestamp) {
-                android.util.Log.d(
-                    "StepCounterFGSvc",
-                    "checkMissedHourBoundaries: No valid saved hour (saved=$savedHourTimestamp, current=$currentHourTimestamp), skipping"
-                )
-                return
+            when (action) {
+                BoundaryAction.NONE -> {
+                    android.util.Log.d(
+                        "StepCounterFGSvc",
+                        "checkMissedHourBoundaries: Nothing to close (current=${java.util.Date(currentHourTimestamp)}, " +
+                                "saved=$savedHourTimestamp, effectiveLastProcessed=$effectiveLastProcessed), skipping"
+                    )
+                    return
+                }
+                BoundaryAction.DELEGATE_TO_HANDLER -> {
+                    // No boundary was missed — this is just the hour ticking over, reached
+                    // here because the alarm woke the device before the boundary loop's timer
+                    // fired. Backfill would leave the completed hour on its partial checkpoint
+                    // row and then mark the boundary processed, so the handler has to run.
+                    android.util.Log.i(
+                        "StepCounterFGSvc",
+                        "checkMissedHourBoundaries: Saved hour ${java.util.Date(savedHourTimestamp)} is the hour that " +
+                                "just completed (gap=1) — ordinary hourly switch, not a missed boundary. " +
+                                "Delegating to the boundary handler so the hour's real total is saved."
+                    )
+                    handleHourBoundaryLocked()
+                    return
+                }
+                BoundaryAction.BACKFILL -> { /* fall through to the backfill below */ }
             }
 
             val hoursDifference = (currentHourTimestamp - savedHourTimestamp) / (60 * 60 * 1000)
-            if (hoursDifference <= 0) {
-                android.util.Log.d("StepCounterFGSvc", "checkMissedHourBoundaries: No hour gap detected, skipping")
-                return
-            }
-
-            // No boundary was missed — this is just the hour ticking over, reached here
-            // because the alarm woke the device before the boundary loop's timer fired.
-            // Backfill would leave the completed hour on its partial checkpoint row and
-            // then mark the boundary processed, so the handler has to run instead.
-            if (shouldDelegateOrdinaryHourTransition(
-                    hoursDifference = hoursDifference,
-                    currentDeviceTotal = sensorManager.getCurrentTotalSteps(),
-                    rebootDetected = isDeviceRebootDetected(
-                        currentBootCount = getCurrentBootCount(),
-                        savedBootCount = preferences.lastKnownBootCount.first()
-                    )
-                )
-            ) {
-                android.util.Log.i(
-                    "StepCounterFGSvc",
-                    "checkMissedHourBoundaries: Saved hour ${java.util.Date(savedHourTimestamp)} is the hour that " +
-                            "just completed (gap=1) — ordinary hourly switch, not a missed boundary. " +
-                            "Delegating to the boundary handler so the hour's real total is saved."
-                )
-                handleHourBoundaryLocked()
-                return
-            }
-
             val rangeStart = savedHourTimestamp
             val rangeEnd = currentHourTimestamp - (60 * 60 * 1000)
-            if (rangeEnd < rangeStart) {
-                android.util.Log.d("StepCounterFGSvc", "checkMissedHourBoundaries: Range end < start, skipping")
-                return
-            }
 
             val claimed = preferences.tryClaimBackfillRange(rangeStart, rangeEnd)
             if (!claimed) {
