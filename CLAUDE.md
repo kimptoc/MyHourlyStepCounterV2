@@ -550,3 +550,29 @@ object StepTrackerConfig {
 1. **Validate Distribution Logic:** Monitor real-world usage to ensure step distribution across missed hours is reasonable
 2. **Performance Monitoring:** Assess the impact of enhanced initialization logic on app startup time
 3. **Edge Case Testing:** Verify the logic handles unusual scenarios (very long closure periods, system time changes, etc.)
+
+---
+
+## Session Summary: Hourly Switch Closing an Hour on the Wrong Value
+
+### Key Decisions Made
+
+1. **The Hourly Switch Belongs to the Boundary Handler:** `checkMissedHourBoundaries()` treated a saved-hour timestamp exactly one hour behind the current hour as a missed-boundary gap. It is not — it is the ordinary hourly switch. Backfill cannot close it: the just-completed hour still carries the in-progress checkpoint row written mid-hour, backfill treats any stored row as final, and it then marks the boundary processed, so `handleHourBoundary()` (the only path that recomputes the hour from its baseline) dedups itself out and the hour's real total is never saved. A gap of exactly one hour now hands off to `handleHourBoundary()`.
+
+2. **Why It Surfaced with the Short-Lived Wake Lock:** With a continuous wake lock the boundary loop's `delay()` fired on time at XX:00 and won the race, so the backfill path always found the boundary already processed. Without it the device deep-sleeps, the XX:00 alarm wakes it first, `onStartCommand` runs the missed-boundary check, and the backfill path started closing every hour.
+
+3. **What Was Shown Is What Gets Saved:** The persistent notification and the goal-achieved alert use the sensor's displayed in-hour count, which is monotonic and offset-inclusive; the boundary save recomputed from the hour baseline and could land lower. The saved value now takes the higher of the two, so a timeline marker cannot contradict a "goal achieved" notification for the same hour. When counter continuity is broken (reboot, adjusted baseline) the displayed value is not evidence and the computed value stands.
+
+4. **Post-Reboot Guards Stay With Backfill:** The hand-off is refused when the sensor has not reported yet or a reboot was detected — `handleHourBoundary()` would reset the hour baseline from a stale saved total, which is what the backfill path's own reboot guards exist to prevent.
+
+### Code Patterns Established
+
+- **One Owner Per Hour Close:** `boundaryMutex` serializes the boundary loop and the alarm-driven check. Each has a public wrapper that takes the lock and a `...Locked()` body; the cross-calls between them use the `Locked` variants, since a Kotlin `Mutex` is not reentrant.
+- **A Stored Row Is Not Automatically Final:** During backfill an existing row may be a partial checkpoint. Where device-total snapshots bracket the hour, the measured delta raises it; the stored row only stands when it is already the higher value.
+- **Reconcile Before Persisting:** When two representations of the same quantity exist (recomputed vs. displayed), decide explicitly which wins rather than letting the write path pick silently.
+
+### Next Steps Identified
+
+1. **Confirm on Device:** Watch the `Delegating to the boundary handler` and `Saving completed hour` logs across a few hour boundaries with the screen off, and check the timeline markers against the reminder/achievement notifications for the same hours.
+2. **Checkpoint Cadence During Doze:** The 5-minute checkpoint loop also stalls in deep sleep, so a stale partial row is the norm rather than the exception — worth confirming the boundary save is now consistently the value that lands.
+3. **Backfill for Real Gaps:** Multi-hour gaps still attribute unsnapshotted steps evenly across missed hours; unchanged here, but the raised-checkpoint path should be watched for hours that already had rows.
