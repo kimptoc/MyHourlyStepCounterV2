@@ -46,6 +46,11 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
     val scrollState = rememberScrollState()
     val context = androidx.compose.ui.platform.LocalContext.current
     val preferences = remember { com.example.myhourlystepcounterv2.data.StepPreferences(context.applicationContext) }
+    val anomalyDao = remember {
+        com.example.myhourlystepcounterv2.data.StepDatabase
+            .getDatabase(context.applicationContext).stepAnomalyDao()
+    }
+    val recentAnomalies by anomalyDao.getRecentAnomalies(5).collectAsState(initial = emptyList())
     val coroutineScope = rememberCoroutineScope()
     val powerManager = remember { context.getSystemService(Context.POWER_SERVICE) as PowerManager }
 
@@ -392,6 +397,41 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = 8.dp, top = 4.dp)
                 )
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Text(
+                text = "Data integrity",
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            if (recentAnomalies.isEmpty()) {
+                Text(
+                    text = "No anomalies recorded. Every saved hour matches what the step counter actually moved.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            } else {
+                Text(
+                    text = "${recentAnomalies.size} recent hour(s) recorded more steps than the sensor moved. " +
+                            "Step data is left untouched; this is a record for diagnosis.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+                val hourFormat = remember { java.text.SimpleDateFormat("EEE d MMM, HH:mm", java.util.Locale.getDefault()) }
+                recentAnomalies.forEach { anomaly ->
+                    Text(
+                        text = "${hourFormat.format(java.util.Date(anomaly.hourTimestamp))} — " +
+                                "saved ${anomaly.savedSteps}, sensor moved ${anomaly.corroboratedDelta} " +
+                                "(${anomaly.sourcePath})",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 8.dp, top = 2.dp)
+                    )
+                }
             }
         }
     }

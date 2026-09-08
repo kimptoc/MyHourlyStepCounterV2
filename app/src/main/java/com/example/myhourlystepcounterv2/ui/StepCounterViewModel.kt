@@ -674,6 +674,6 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
             )
             return
         }
-        repository.saveHourlySteps(timestamp, steps)
+        repository.saveHourlySteps(timestamp, steps, sourcePath = "viewModel")
     }
 }
