@@ -355,6 +355,26 @@ class StepCounterForegroundService : android.app.Service() {
         }
 
         /**
+         * Reconcile the recomputed hour total with the in-hour count the user was actually
+         * shown (persistent notification, goal-achieved alert). The displayed count is
+         * monotonic and includes the pre-reboot offset, so it can legitimately sit above a
+         * bare device-total delta; persisting the lower value is what makes a timeline
+         * marker contradict the "goal achieved" notification for the same hour. When counter
+         * continuity is broken the displayed value is not trustworthy (post-reboot counter,
+         * adjusted baseline), so the computed value stands on its own.
+         */
+        fun reconcileBoundarySaveWithDisplay(
+            computedSteps: Int,
+            displayedSteps: Int,
+            continuityBroken: Boolean,
+            maxStepsPerHour: Int
+        ): Int {
+            val safeComputed = computedSteps.coerceIn(0, maxStepsPerHour)
+            if (continuityBroken) return safeComputed
+            return maxOf(safeComputed, maxOf(0, displayedSteps)).coerceAtMost(maxStepsPerHour)
+        }
+
+        /**
          * Steps to write for one hour of a missed-boundary backfill, or null to leave the
          * stored row alone. A device-total snapshot inside the hour brackets it against
          * [previousTotal], so its delta is measured; an existing row may be a partial
