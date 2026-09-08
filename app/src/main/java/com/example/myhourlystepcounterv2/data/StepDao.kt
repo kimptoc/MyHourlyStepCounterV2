@@ -39,8 +39,9 @@ interface StepDao {
      * This prevents WorkManager from overwriting ViewModel's closure distribution.
      */
     @Transaction
-    suspend fun saveHourlyStepsAtomic(timestamp: Long, stepCount: Int) {
+    suspend fun saveHourlyStepsAtomic(timestamp: Long, stepCount: Int): Boolean {
         val existing = getStepForHour(timestamp)
+        val persisted = StepWritePolicy.persists(existing?.stepCount, stepCount)
         if (existing == null) {
             // No record yet - insert
             insertStep(StepEntity(timestamp = timestamp, stepCount = stepCount))
@@ -62,5 +63,6 @@ interface StepDao {
                 "Skipping save for hour ${java.util.Date(timestamp)}: existing=${existing.stepCount}, new=$stepCount (keeping existing)"
             )
         }
+        return persisted
     }
 }

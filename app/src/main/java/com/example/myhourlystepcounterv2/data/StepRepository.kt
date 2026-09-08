@@ -44,11 +44,14 @@ class StepRepository(
 
     suspend fun saveHourlySteps(timestamp: Long, stepCount: Int, sourcePath: String = "unknown") {
         // Use atomic save to prevent race conditions (keeps higher value)
-        stepDao.saveHourlyStepsAtomic(timestamp, stepCount)
+        val persisted = stepDao.saveHourlyStepsAtomic(timestamp, stepCount)
 
-        // Only remember who wrote this hour. The hour cannot be judged yet: the ledger has no
-        // snapshot past the boundary we are standing on, so any verdict now would be "cannot
-        // judge". sweepForAnomalies() does the judging once the evidence exists.
+        // Only remember who wrote this hour, and only if the write actually landed — the
+        // atomic save drops anything not higher than the stored row, and a dropped writer
+        // stamping its name here would blame it for a value it never wrote. The hour itself
+        // cannot be judged yet: the ledger has no snapshot past the boundary we are standing
+        // on, so sweepForAnomalies() does the judging once the evidence exists.
+        if (!persisted) return
         try {
             sourcePathRecorder?.invoke(timestamp, sourcePath)
         } catch (e: Exception) {

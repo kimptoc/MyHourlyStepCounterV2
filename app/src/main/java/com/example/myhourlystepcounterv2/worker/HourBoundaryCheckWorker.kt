@@ -9,6 +9,8 @@ import androidx.work.WorkerParameters
 import com.example.myhourlystepcounterv2.data.StepPreferences
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService
 import com.example.myhourlystepcounterv2.worker.WorkManagerScheduler
+import com.example.myhourlystepcounterv2.data.StepDatabase
+import com.example.myhourlystepcounterv2.data.StepRepository
 import kotlinx.coroutines.flow.first
 
 /**
@@ -23,6 +25,14 @@ class HourBoundaryCheckWorker(
     override suspend fun doWork(): Result {
         return try {
             val preferences = StepPreferences(applicationContext)
+
+            // Sweep first and unconditionally. The boundary sweep needs the foreground service
+            // to have survived, and app-open needs the user to show up; neither is true in the
+            // case that matters most — the service died during the hours it was meant to be
+            // recording. This is the path that still reports those hours.
+            runCatching { sweepForAnomalies(preferences) }
+                .onFailure { android.util.Log.w("HourBoundaryCheckWorker", "Anomaly sweep failed", it) }
+
             val enabled = preferences.permanentNotificationEnabled.first()
             if (!enabled) {
                 android.util.Log.w("HourBoundaryCheckWorker", "Permanent notification disabled; skipping service start")
@@ -48,5 +58,15 @@ class HourBoundaryCheckWorker(
             android.util.Log.e("HourBoundaryCheckWorker", "Error checking for missed hour boundaries", e)
             Result.retry()
         }
+    }
+
+    private suspend fun sweepForAnomalies(preferences: StepPreferences) {
+        val database = StepDatabase.getDatabase(applicationContext)
+        StepRepository(
+            stepDao = database.stepDao(),
+            anomalyDao = database.stepAnomalyDao(),
+            snapshotProvider = { preferences.getDeviceTotalSnapshots() },
+            sourcePathReader = { preferences.getHourSourcePaths() }
+        ).sweepForAnomalies()
     }
 }
