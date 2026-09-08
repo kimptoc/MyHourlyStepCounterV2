@@ -14,8 +14,8 @@ interface StepAnomalyDao {
     @Query("SELECT * FROM step_anomalies ORDER BY hourTimestamp DESC LIMIT :limit")
     fun getRecentAnomalies(limit: Int): Flow<List<StepAnomalyEntity>>
 
-    @Query("SELECT COUNT(*) FROM step_anomalies WHERE detectedAt >= :since")
-    fun getAnomalyCountSince(since: Long): Flow<Int>
+    @Query("SELECT hourTimestamp FROM step_anomalies WHERE hourTimestamp >= :since")
+    suspend fun getAnomalyHoursSince(since: Long): List<Long>
 
     @Query("DELETE FROM step_anomalies WHERE hourTimestamp < :cutoffTime")
     suspend fun deleteOldAnomalies(cutoffTime: Long)

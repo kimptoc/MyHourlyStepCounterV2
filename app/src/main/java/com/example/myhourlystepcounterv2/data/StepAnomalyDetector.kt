@@ -28,7 +28,11 @@ object StepAnomalyDetector {
         val before = ordered.lastOrNull { it.timestamp <= hourStart } ?: return null
         val after = ordered.firstOrNull { it.timestamp >= hourEnd } ?: return null
 
-        val delta = (after.deviceTotal - before.deviceTotal).coerceAtLeast(0)
+        // A counter that went backwards was reboot-reset or reseeded by another app. That is
+        // not evidence the user took no steps — it is the absence of evidence, so refuse to
+        // judge rather than clamping to a zero the hour would then be accused of exceeding.
+        if (after.deviceTotal < before.deviceTotal) return null
+        val delta = after.deviceTotal - before.deviceTotal
 
         var maxGap = 0L
         var previous = before.timestamp
@@ -76,41 +80,41 @@ object StepAnomalyDetector {
     }
 
     /**
-     * Decide whether the value now persisted for an hour needs recording, and as what.
+     * Evaluate stored hours that the ledger can now judge.
      *
-     * [attemptedSteps] is the incoming write; [storedSteps] is what the row already held.
-     * Because [StepDao.saveHourlyStepsAtomic] keeps the higher of the two, the value that
-     * ends up persisted is their maximum — and when that maximum is the pre-existing row, a
-     * correct lower write was just refused, which is the fingerprint of a phantom that can
-     * no longer be dislodged. That case is labelled so it is distinguishable from a fresh
-     * bad write.
+     * Detection cannot run when an hour is written. The write happens at the boundary, and
+     * the ledger has no snapshot past that boundary yet, so the hour cannot be bracketed and
+     * every verdict would be "cannot judge" — including for the incident this exists to
+     * catch. The evidence only arrives with the next snapshot, so evaluation is deferred to
+     * a sweep that runs later and re-reads what is by then a complete window.
      *
-     * Returns null when the hour is corroborated, or when the ledger cannot judge it.
+     * Skips the hour containing [now]: its row is a partial checkpoint by definition.
+     * Skips hours in [alreadyRecorded] so a repeated sweep does not re-report.
      */
-    fun evaluate(
-        hourStart: Long,
-        attemptedSteps: Int,
-        storedSteps: Int?,
+    fun sweepCompletedHours(
+        storedHours: List<StepEntity>,
         snapshots: List<DeviceTotalSnapshot>,
-        sourcePath: String,
+        sourcePathByHour: Map<Long, String>,
+        alreadyRecorded: Set<Long>,
+        now: Long,
         detectedAt: Long
-    ): StepAnomalyEntity? {
-        val bound = corroboratedBound(hourStart, snapshots) ?: return null
+    ): List<StepAnomalyEntity> {
+        val currentHourStart = now - (now % ONE_HOUR_MS)
+        return storedHours.mapNotNull { row ->
+            if (row.timestamp in alreadyRecorded) return@mapNotNull null
+            if (row.timestamp >= currentHourStart) return@mapNotNull null
 
-        val existing = storedSteps ?: 0
-        val effectiveSteps = maxOf(attemptedSteps, existing)
-        if (!isAnomalous(effectiveSteps, bound)) return null
+            val bound = corroboratedBound(row.timestamp, snapshots) ?: return@mapNotNull null
+            if (!isAnomalous(row.stepCount, bound)) return@mapNotNull null
 
-        val rejectedALowerWrite = storedSteps != null && attemptedSteps <= existing
-        val label = if (rejectedALowerWrite) "monotonicRejection:$sourcePath" else sourcePath
-
-        return StepAnomalyEntity(
-            hourTimestamp = hourStart,
-            savedSteps = effectiveSteps,
-            corroboratedDelta = bound.delta,
-            maxSnapshotGapMs = bound.maxSnapshotGapMs,
-            sourcePath = label,
-            detectedAt = detectedAt
-        )
+            StepAnomalyEntity(
+                hourTimestamp = row.timestamp,
+                savedSteps = row.stepCount,
+                corroboratedDelta = bound.delta,
+                maxSnapshotGapMs = bound.maxSnapshotGapMs,
+                sourcePath = sourcePathByHour[row.timestamp] ?: "unknown",
+                detectedAt = detectedAt
+            )
+        }
     }
 }

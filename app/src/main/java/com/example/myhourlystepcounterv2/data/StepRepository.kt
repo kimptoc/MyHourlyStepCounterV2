@@ -11,8 +11,15 @@ import kotlinx.coroutines.flow.Flow
 class StepRepository(
     private val stepDao: StepDao,
     private val anomalyDao: StepAnomalyDao? = null,
-    private val snapshotProvider: (suspend () -> List<DeviceTotalSnapshot>)? = null
+    private val snapshotProvider: (suspend () -> List<DeviceTotalSnapshot>)? = null,
+    private val sourcePathRecorder: (suspend (Long, String) -> Unit)? = null,
+    private val sourcePathReader: (suspend () -> Map<Long, String>)? = null
 ) {
+    companion object {
+        /** How far back a sweep looks. Matches the snapshot ledger's own retention. */
+        const val SWEEP_WINDOW_MS = 24L * 60L * 60L * 1000L
+    }
+
     init {
         // Detection is optional wiring, so its absence is silent by design. Say once, out loud,
         // which mode this repository is in — otherwise "no anomalies logged" is indistinguishable
@@ -36,49 +43,61 @@ class StepRepository(
     }
 
     suspend fun saveHourlySteps(timestamp: Long, stepCount: Int, sourcePath: String = "unknown") {
-        // Read before the write so a rejected lower value is still attributable.
-        val storedBefore = runCatching { stepDao.getStepForHour(timestamp)?.stepCount }.getOrNull()
-
         // Use atomic save to prevent race conditions (keeps higher value)
         stepDao.saveHourlyStepsAtomic(timestamp, stepCount)
 
-        recordAnomalyIfAny(timestamp, stepCount, storedBefore, sourcePath)
+        // Only remember who wrote this hour. The hour cannot be judged yet: the ledger has no
+        // snapshot past the boundary we are standing on, so any verdict now would be "cannot
+        // judge". sweepForAnomalies() does the judging once the evidence exists.
+        try {
+            sourcePathRecorder?.invoke(timestamp, sourcePath)
+        } catch (e: Exception) {
+            android.util.Log.w("StepAnomaly", "Could not record writer for ${java.util.Date(timestamp)}", e)
+        }
     }
 
-    private suspend fun recordAnomalyIfAny(
-        timestamp: Long,
-        stepCount: Int,
-        storedBefore: Int?,
-        sourcePath: String
-    ) {
+    /**
+     * Evaluate completed hours the snapshot ledger can now bracket, and record any that claim
+     * more steps than the counter moved. Safe to call repeatedly — hours already recorded are
+     * skipped. Never alters step data.
+     *
+     * Because this reads stored rows rather than incoming writes, it also catches a phantom
+     * that a later correct (lower) write could not dislodge: saveHourlyStepsAtomic only ever
+     * raises a value, so such a row would otherwise stay wrong and unreported forever.
+     */
+    suspend fun sweepForAnomalies(now: Long = System.currentTimeMillis()) {
         val dao = anomalyDao ?: return
         val provider = snapshotProvider ?: return
         try {
-            val anomaly = StepAnomalyDetector.evaluate(
-                hourStart = timestamp,
-                attemptedSteps = stepCount,
-                storedSteps = storedBefore,
-                snapshots = provider(),
-                sourcePath = sourcePath,
-                detectedAt = System.currentTimeMillis()
-            ) ?: return
+            val windowStart = now - SWEEP_WINDOW_MS
+            val stored = stepDao.getStepsInRange(windowStart, now)
+            if (stored.isEmpty()) return
 
-            android.util.Log.e(
-                "StepAnomaly",
-                "Fabricated hour ${java.util.Date(anomaly.hourTimestamp)}: saved=${anomaly.savedSteps} " +
-                        "but counter only moved ${anomaly.corroboratedDelta} " +
-                        "(maxSnapshotGap=${anomaly.maxSnapshotGapMs}ms, source=${anomaly.sourcePath})"
+            val found = StepAnomalyDetector.sweepCompletedHours(
+                storedHours = stored,
+                snapshots = provider(),
+                sourcePathByHour = sourcePathReader?.invoke() ?: emptyMap(),
+                alreadyRecorded = dao.getAnomalyHoursSince(windowStart).toSet(),
+                now = now,
+                detectedAt = now
             )
-            dao.insertAnomaly(anomaly)
+
+            for (anomaly in found) {
+                android.util.Log.e(
+                    "StepAnomaly",
+                    "Fabricated hour ${java.util.Date(anomaly.hourTimestamp)}: saved=${anomaly.savedSteps} " +
+                            "but counter only moved ${anomaly.corroboratedDelta} " +
+                            "(maxSnapshotGap=${anomaly.maxSnapshotGapMs}ms, source=${anomaly.sourcePath})"
+                )
+                dao.insertAnomaly(anomaly)
+            }
         } catch (e: Exception) {
-            // Observability must never break the write it observes.
-            android.util.Log.w("StepAnomaly", "Anomaly check failed for ${java.util.Date(timestamp)}", e)
+            // Observability must never break the app that hosts it.
+            android.util.Log.w("StepAnomaly", "Anomaly sweep failed", e)
         }
     }
 
     fun getRecentAnomalies(limit: Int): Flow<List<StepAnomalyEntity>>? = anomalyDao?.getRecentAnomalies(limit)
-
-    fun getAnomalyCountSince(since: Long): Flow<Int>? = anomalyDao?.getAnomalyCountSince(since)
 
     suspend fun getStepForHour(timestamp: Long): StepEntity? {
         return stepDao.getStepForHour(timestamp)
@@ -104,7 +123,4 @@ class StepRepository(
         stepDao.deleteOldSteps(cutoffTime)
     }
 
-    suspend fun deleteOldAnomalies(cutoffTime: Long) {
-        anomalyDao?.deleteOldAnomalies(cutoffTime)
-    }
 }

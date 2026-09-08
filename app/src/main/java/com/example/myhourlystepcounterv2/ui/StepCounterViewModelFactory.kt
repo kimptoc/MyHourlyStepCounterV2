@@ -18,7 +18,9 @@ class StepCounterViewModelFactory(private val context: Context) : ViewModelProvi
         val repository = StepRepository(
             stepDao = database.stepDao(),
             anomalyDao = database.stepAnomalyDao(),
-            snapshotProvider = { preferences.getDeviceTotalSnapshots() }
+            snapshotProvider = { preferences.getDeviceTotalSnapshots() },
+            sourcePathRecorder = { hour, path -> preferences.saveHourSourcePath(hour, path) },
+            sourcePathReader = { preferences.getHourSourcePaths() }
         )
         return StepCounterViewModel(repository) as T
     }

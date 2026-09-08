@@ -131,65 +131,121 @@ class StepAnomalyDetectorTest {
         assertNull(StepAnomalyDetector.corroboratedBound(phantomHourStart, onlyBefore))
     }
 
+
+
+
+
     @Test
-    fun evaluate_recordsTheFabricatedHourWithTheBoundItViolated() {
-        val record = StepAnomalyDetector.evaluate(
-            hourStart = phantomHourStart,
-            attemptedSteps = 10000,
-            storedSteps = null,
-            snapshots = realLedger(),
-            sourcePath = "handleHourBoundary",
-            detectedAt = 1788836402000L
+    fun corroboratedBound_isNullWhenTheCounterWentBackwards() {
+        // A reboot or a health-app reseed drops the counter. That is not "the counter provably
+        // moved zero" — it is "this hour cannot be judged". Clamping it to 0 would accuse a
+        // legitimate hour of inventing every step in it.
+        val afterReset = listOf(
+            DeviceTotalSnapshot(phantomHourStart - 60_000L, 263188),
+            DeviceTotalSnapshot(phantomHourStart + 1_800_000L, 40),
+            DeviceTotalSnapshot(phantomHourStart + 3_660_000L, 412)
         )
 
-        assertEquals(phantomHourStart, record!!.hourTimestamp)
-        assertEquals(10000, record.savedSteps)
-        assertEquals(0, record.corroboratedDelta)
-        assertEquals("handleHourBoundary", record.sourcePath)
+        assertNull(StepAnomalyDetector.corroboratedBound(phantomHourStart, afterReset))
+    }
+
+    // --- Deferred sweep -------------------------------------------------------------
+    // The write that creates a phantom happens at the hour boundary, before the ledger has
+    // any snapshot past that boundary, so the hour cannot be bracketed at write time. These
+    // assert the detector works on the ledger as it exists LATER, which is the only time the
+    // evidence is actually available.
+
+    private fun storedHoursForThatDay(): List<StepEntity> =
+        savedThatDay.map { (hourOfDay, steps) ->
+            StepEntity(timestamp = hourStart(hourOfDay), stepCount = steps, createdAt = 0L)
+        }
+
+    @Test
+    fun sweep_catchesThePhantomOnceTheLedgerHasMovedPastTheBoundary() {
+        // 05:00 — by now the 04:02 snapshot exists, so the 03:00 hour is bracketed at last.
+        val sweepTime = hourStart(5)
+        val ledgerSoFar = realLedger().filter { it.timestamp <= sweepTime }
+
+        val found = StepAnomalyDetector.sweepCompletedHours(
+            storedHours = storedHoursForThatDay(),
+            snapshots = ledgerSoFar,
+            sourcePathByHour = mapOf(phantomHourStart to "handleHourBoundary"),
+            alreadyRecorded = emptySet(),
+            now = sweepTime,
+            detectedAt = sweepTime
+        )
+
+        assertEquals(listOf(phantomHourStart), found.map { it.hourTimestamp })
+        assertEquals(10000, found.single().savedSteps)
+        assertEquals("handleHourBoundary", found.single().sourcePath)
     }
 
     @Test
-    fun evaluate_returnsNullWhenTheHourIsCorroborated() {
-        val record = StepAnomalyDetector.evaluate(
-            hourStart = hourStart(12),
-            attemptedSteps = 612,
-            storedSteps = null,
-            snapshots = realLedger(),
-            sourcePath = "handleHourBoundary",
-            detectedAt = 1788869000000L
+    fun sweep_isSilentAtTheBoundaryItselfBecauseTheHourIsNotBracketedYet() {
+        // 04:00:02 — the moment the phantom was actually written. Nothing to judge against.
+        val writeTime = 1788836402000L
+        val ledgerSoFar = realLedger().filter { it.timestamp <= writeTime }
+
+        val found = StepAnomalyDetector.sweepCompletedHours(
+            storedHours = storedHoursForThatDay(),
+            snapshots = ledgerSoFar,
+            sourcePathByHour = emptyMap(),
+            alreadyRecorded = emptySet(),
+            now = writeTime,
+            detectedAt = writeTime
         )
 
-        assertNull(record)
+        assertTrue(found.none { it.hourTimestamp == phantomHourStart })
     }
 
     @Test
-    fun evaluate_flagsTheStoredValueWhenACorrectedLowerWriteIsRejected() {
-        // The monotonic DAO keeps the higher value, so a correct low write cannot displace a
-        // phantom. The stored row is the suspect one and that is what must be recorded.
-        val record = StepAnomalyDetector.evaluate(
-            hourStart = phantomHourStart,
-            attemptedSteps = 0,
-            storedSteps = 10000,
-            snapshots = realLedger(),
-            sourcePath = "backfill",
-            detectedAt = 1788836402000L
+    fun sweep_doesNotReportAnHourAlreadyRecorded() {
+        val sweepTime = hourStart(5)
+
+        val found = StepAnomalyDetector.sweepCompletedHours(
+            storedHours = storedHoursForThatDay(),
+            snapshots = realLedger().filter { it.timestamp <= sweepTime },
+            sourcePathByHour = emptyMap(),
+            alreadyRecorded = setOf(phantomHourStart),
+            now = sweepTime,
+            detectedAt = sweepTime
         )
 
-        assertEquals(10000, record!!.savedSteps)
-        assertTrue(record.sourcePath.contains("monotonicRejection"))
+        assertTrue(found.isEmpty())
     }
 
     @Test
-    fun evaluate_returnsNullWhenTheLedgerCannotJudgeTheHour() {
-        val record = StepAnomalyDetector.evaluate(
-            hourStart = phantomHourStart,
-            attemptedSteps = 10000,
-            storedSteps = null,
-            snapshots = listOf(DeviceTotalSnapshot(phantomHourStart - 60_000L, 263188)),
-            sourcePath = "handleHourBoundary",
-            detectedAt = 1788836402000L
+    fun sweep_skipsTheHourStillInProgress() {
+        // The current hour's row is a partial checkpoint by definition; judging it would
+        // flag every in-flight hour.
+        val now = hourStart(12) + 1_800_000L
+        val inProgress = listOf(StepEntity(timestamp = hourStart(12), stepCount = 9999, createdAt = 0L))
+
+        val found = StepAnomalyDetector.sweepCompletedHours(
+            storedHours = inProgress,
+            snapshots = realLedger(),
+            sourcePathByHour = emptyMap(),
+            alreadyRecorded = emptySet(),
+            now = now,
+            detectedAt = now
         )
 
-        assertNull(record)
+        assertTrue(found.isEmpty())
+    }
+
+    @Test
+    fun sweep_labelsAnHourWithNoRecordedWriterAsUnknown() {
+        val sweepTime = hourStart(5)
+
+        val found = StepAnomalyDetector.sweepCompletedHours(
+            storedHours = storedHoursForThatDay(),
+            snapshots = realLedger().filter { it.timestamp <= sweepTime },
+            sourcePathByHour = emptyMap(),
+            alreadyRecorded = emptySet(),
+            now = sweepTime,
+            detectedAt = sweepTime
+        )
+
+        assertEquals("unknown", found.single().sourcePath)
     }
 }

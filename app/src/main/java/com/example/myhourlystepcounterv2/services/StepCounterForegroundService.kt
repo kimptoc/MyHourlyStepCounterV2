@@ -468,7 +468,9 @@ class StepCounterForegroundService : android.app.Service() {
         repository = com.example.myhourlystepcounterv2.data.StepRepository(
             stepDao = database.stepDao(),
             anomalyDao = database.stepAnomalyDao(),
-            snapshotProvider = { preferences.getDeviceTotalSnapshots() }
+            snapshotProvider = { preferences.getDeviceTotalSnapshots() },
+            sourcePathRecorder = { hour, path -> preferences.saveHourSourcePath(hour, path) },
+            sourcePathReader = { preferences.getHourSourcePaths() }
         )
         scope.launch {
             val bootCount = getCurrentBootCount()
@@ -1916,6 +1918,11 @@ class StepCounterForegroundService : android.app.Service() {
                 lastSuccessfulHourBoundary = System.currentTimeMillis()
                 consecutiveFailures = 0
                 android.util.Log.i("StepCounterFGSvc", "✅ Hour boundary completed successfully")
+
+                // The hour just closed cannot be judged yet, but the one before it now can:
+                // the ledger has moved past that boundary. Idempotent, never touches steps,
+                // and off the boundary path so a slow sweep cannot delay the next hour.
+                scope.launch { repository.sweepForAnomalies() }
             },
             onIterationFailure = { error, failureCount ->
                 consecutiveFailures = failureCount

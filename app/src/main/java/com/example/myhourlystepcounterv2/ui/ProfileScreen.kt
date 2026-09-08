@@ -408,7 +408,8 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
 
             if (recentAnomalies.isEmpty()) {
                 Text(
-                    text = "No anomalies recorded. Every saved hour matches what the step counter actually moved.",
+                    text = "No anomalies recorded. Hours are checked once the sensor log covers them; " +
+                            "hours it cannot cover are left unjudged rather than assumed correct.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp)
