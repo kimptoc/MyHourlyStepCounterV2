@@ -30,8 +30,13 @@ class HourBoundaryCheckWorker(
             // to have survived, and app-open needs the user to show up; neither is true in the
             // case that matters most — the service died during the hours it was meant to be
             // recording. This is the path that still reports those hours.
-            runCatching { sweepForAnomalies(preferences) }
-                .onFailure { android.util.Log.w("HourBoundaryCheckWorker", "Anomaly sweep failed", it) }
+            try {
+                sweepForAnomalies(preferences)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.w("HourBoundaryCheckWorker", "Anomaly sweep failed", e)
+            }
 
             val enabled = preferences.permanentNotificationEnabled.first()
             if (!enabled) {
@@ -54,6 +59,10 @@ class HourBoundaryCheckWorker(
             }
 
             Result.success()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // CancellationException is an Exception, so the catch below would swallow it and
+            // report retry for work that was actually cancelled. Let it unwind.
+            throw e
         } catch (e: Exception) {
             android.util.Log.e("HourBoundaryCheckWorker", "Error checking for missed hour boundaries", e)
             Result.retry()

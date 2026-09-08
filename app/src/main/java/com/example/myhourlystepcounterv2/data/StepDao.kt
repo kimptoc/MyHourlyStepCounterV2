@@ -41,26 +41,28 @@ interface StepDao {
     @Transaction
     suspend fun saveHourlyStepsAtomic(timestamp: Long, stepCount: Int): Boolean {
         val existing = getStepForHour(timestamp)
+        // Branch on the policy itself rather than re-deriving its conditions here: the return
+        // value decides who may claim authorship of the hour, so a second copy of the rule
+        // drifting out of step would misattribute silently.
         val persisted = StepWritePolicy.persists(existing?.stepCount, stepCount)
-        if (existing == null) {
-            // No record yet - insert
+        if (persisted) {
             insertStep(StepEntity(timestamp = timestamp, stepCount = stepCount))
-            android.util.Log.i(
-                "StepDao",
-                "Inserted hour ${java.util.Date(timestamp)}: steps=$stepCount"
-            )
-        } else if (stepCount > existing.stepCount) {
-            // Existing record but new value is higher - update
-            insertStep(StepEntity(timestamp = timestamp, stepCount = stepCount))
-            android.util.Log.i(
-                "StepDao",
-                "Updated hour ${java.util.Date(timestamp)}: existing=${existing.stepCount}, new=$stepCount"
-            )
+            if (existing == null) {
+                android.util.Log.i(
+                    "StepDao",
+                    "Inserted hour ${java.util.Date(timestamp)}: steps=$stepCount"
+                )
+            } else {
+                android.util.Log.i(
+                    "StepDao",
+                    "Updated hour ${java.util.Date(timestamp)}: existing=${existing.stepCount}, new=$stepCount"
+                )
+            }
         } else {
             // Existing record is higher or equal - keep it
             android.util.Log.w(
                 "StepDao",
-                "Skipping save for hour ${java.util.Date(timestamp)}: existing=${existing.stepCount}, new=$stepCount (keeping existing)"
+                "Skipping save for hour ${java.util.Date(timestamp)}: existing=${existing?.stepCount}, new=$stepCount (keeping existing)"
             )
         }
         return persisted
