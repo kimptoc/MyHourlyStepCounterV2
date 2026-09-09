@@ -465,7 +465,13 @@ class StepCounterForegroundService : android.app.Service() {
 
         preferences = StepPreferences(applicationContext)
         val database = com.example.myhourlystepcounterv2.data.StepDatabase.getDatabase(applicationContext)
-        repository = com.example.myhourlystepcounterv2.data.StepRepository(database.stepDao())
+        repository = com.example.myhourlystepcounterv2.data.StepRepository(
+            stepDao = database.stepDao(),
+            anomalyDao = database.stepAnomalyDao(),
+            snapshotProvider = { preferences.getDeviceTotalSnapshots() },
+            sourcePathRecorder = { hour, path -> preferences.saveHourSourcePath(hour, path) },
+            sourcePathReader = { preferences.getHourSourcePaths() }
+        )
         scope.launch {
             val bootCount = getCurrentBootCount()
             val savedBootCount = preferences.lastKnownBootCount.first()
@@ -1187,7 +1193,7 @@ class StepCounterForegroundService : android.app.Service() {
                             } else {
                                 assignedSteps += measuredSteps
                             }
-                            repository.saveHourlySteps(hourCursor, measuredSteps)
+                            repository.saveHourlySteps(hourCursor, measuredSteps, sourcePath = "backfill")
                         }
                         existing != null -> accountedSteps += existing.stepCount
                         else -> missingWithoutSnapshot.add(hourCursor)
@@ -1207,7 +1213,7 @@ class StepCounterForegroundService : android.app.Service() {
                     )
                     for (hourTs in missingWithoutSnapshot) {
                         val stepsClamped = minOf(stepsPerHour, StepTrackerConfig.MAX_STEPS_PER_HOUR)
-                        repository.saveHourlySteps(hourTs, stepsClamped)
+                        repository.saveHourlySteps(hourTs, stepsClamped, sourcePath = "backfillDistribution")
                     }
                 } else if (missingWithoutSnapshot.isNotEmpty()) {
                     android.util.Log.w(
@@ -1435,7 +1441,7 @@ class StepCounterForegroundService : android.app.Service() {
                 "StepCounterFGSvc",
                 "Saving completed hour: timestamp=$previousHourTimestamp (${java.util.Date(previousHourTimestamp)}), steps=$stepsToSave (device=$deviceTotal - baseline=$previousHourStartStepCount, displayed=$displayedPreviousHourSteps)"
             )
-            repository.saveHourlySteps(previousHourTimestamp, stepsToSave)
+            repository.saveHourlySteps(previousHourTimestamp, stepsToSave, sourcePath = "handleHourBoundary")
 
             android.util.Log.i(
                 "StepCounterFGSvc",
@@ -1724,7 +1730,7 @@ class StepCounterForegroundService : android.app.Service() {
             // if a code path misses the offset. saveHourlyStepsAtomic keeps the higher
             // value, so an existing checkpoint is preserved.
             if (newOffset > 0) {
-                repository.saveHourlySteps(currentHourTimestamp, newOffset)
+                repository.saveHourlySteps(currentHourTimestamp, newOffset, sourcePath = "preRebootOffset")
             }
 
             preferences.saveCurrentHourPreRebootOffset(newOffset)
@@ -1762,7 +1768,7 @@ class StepCounterForegroundService : android.app.Service() {
                 maxStepsPerHour = StepTrackerConfig.MAX_STEPS_PER_HOUR
             )
             if (combinedForSavedHour > 0 && savedHourTimestamp > 0) {
-                repository.saveHourlySteps(savedHourTimestamp, combinedForSavedHour)
+                repository.saveHourlySteps(savedHourTimestamp, combinedForSavedHour, sourcePath = "rebootRecovery")
                 android.util.Log.i(
                     "StepCounterFGSvc",
                     "handleRebootRecovery (cross hour): Saved $combinedForSavedHour steps to " +
@@ -1912,6 +1918,11 @@ class StepCounterForegroundService : android.app.Service() {
                 lastSuccessfulHourBoundary = System.currentTimeMillis()
                 consecutiveFailures = 0
                 android.util.Log.i("StepCounterFGSvc", "✅ Hour boundary completed successfully")
+
+                // The hour just closed cannot be judged yet, but the one before it now can:
+                // the ledger has moved past that boundary. Idempotent, never touches steps,
+                // and off the boundary path so a slow sweep cannot delay the next hour.
+                scope.launch { repository.sweepForAnomalies() }
             },
             onIterationFailure = { error, failureCount ->
                 consecutiveFailures = failureCount
@@ -2001,7 +2012,7 @@ class StepCounterForegroundService : android.app.Service() {
             continuityBroken = false,
             maxStepsPerHour = StepTrackerConfig.MAX_STEPS_PER_HOUR
         )
-        repository.saveHourlySteps(currentHourTimestamp, clampedSteps)
+        repository.saveHourlySteps(currentHourTimestamp, clampedSteps, sourcePath = "checkpoint")
         android.util.Log.d(
             "StepCounterFGSvc",
             "Checkpoint saved for ${java.util.Date(currentHourTimestamp)}: steps=$clampedSteps (delta=${currentDeviceTotal - baseline}, offset=$preRebootOffset)"

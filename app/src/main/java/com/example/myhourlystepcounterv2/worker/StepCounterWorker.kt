@@ -32,6 +32,9 @@ class StepCounterWorker(
 
             // Delete records older than 30 days
             database.stepDao().deleteOldSteps(cutoffTimestamp)
+            // Anomaly rows reference those hours, so they age out on the same cutoff rather
+            // than accumulating for the life of the install.
+            database.stepAnomalyDao().deleteOldAnomalies(cutoffTimestamp)
 
             android.util.Log.i(
                 "DailyCleanup",
