@@ -118,6 +118,11 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
             preferences.hourlyStepGoal.collect { _hourlyStepGoal.value = it }
         }
 
+        // Also sweep on open. The boundary sweep needs the service to have survived; this is
+        // the path that still reports a phantom if it did not, and it is what makes the
+        // Profile listing current rather than as-of-the-last-boundary.
+        viewModelScope.launch { repository.sweepForAnomalies() }
+
         // Check permission before registering sensor listener
         if (PermissionHelper.hasActivityRecognitionPermission(context)) {
             sensorManager.startListening()
@@ -668,7 +673,7 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
             )
             return
         }
-        repository.saveHourlySteps(timestamp, steps)
+        repository.saveHourlySteps(timestamp, steps, sourcePath = "viewModel: $reason")
     }
 }
 

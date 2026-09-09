@@ -14,7 +14,14 @@ class StepCounterViewModelFactory(private val context: Context) : ViewModelProvi
     @Suppress("UNCHECKED_CAST")
     override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
         val database = StepDatabase.getDatabase(context)
-        val repository = StepRepository(database.stepDao())
+        val preferences = com.example.myhourlystepcounterv2.data.StepPreferences(context)
+        val repository = StepRepository(
+            stepDao = database.stepDao(),
+            anomalyDao = database.stepAnomalyDao(),
+            snapshotProvider = { preferences.getDeviceTotalSnapshots() },
+            sourcePathRecorder = { hour, path -> preferences.saveHourSourcePath(hour, path) },
+            sourcePathReader = { preferences.getHourSourcePaths() }
+        )
         return StepCounterViewModel(repository) as T
     }
 }

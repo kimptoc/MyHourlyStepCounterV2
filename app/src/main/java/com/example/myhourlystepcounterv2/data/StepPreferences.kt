@@ -43,6 +43,9 @@ class StepPreferences(private val context: Context) {
 
         // Snapshot preferences (rolling 24h window)
         val DEVICE_TOTAL_SNAPSHOTS = stringPreferencesKey("device_total_snapshots_json")
+        // hour-start -> the code path that last wrote that hour, so a sweep detecting an
+        // anomaly later can still name the writer. Logcat is long gone by then.
+        val HOUR_SOURCE_PATHS = stringPreferencesKey("hour_source_paths_json")
 
         // Second reminder (XX:55) preferences
         val LAST_SECOND_REMINDER_TIME = longPreferencesKey("last_second_reminder_time")
@@ -352,6 +355,39 @@ class StepPreferences(private val context: Context) {
     suspend fun getDeviceTotalSnapshots(): List<DeviceTotalSnapshot> {
         val raw = context.dataStore.data.map { it[DEVICE_TOTAL_SNAPSHOTS] ?: "[]" }.first()
         return parseSnapshots(raw)
+    }
+
+    suspend fun saveHourSourcePath(hourTimestamp: Long, sourcePath: String) {
+        context.dataStore.edit { prefs ->
+            val obj = try {
+                org.json.JSONObject(prefs[HOUR_SOURCE_PATHS] ?: "{}")
+            } catch (e: Exception) {
+                org.json.JSONObject()
+            }
+            obj.put(hourTimestamp.toString(), sourcePath)
+            val cutoff = hourTimestamp - SNAPSHOT_RETENTION_MS
+            val pruned = org.json.JSONObject()
+            for (key in obj.keys()) {
+                val asLong = key.toLongOrNull() ?: continue
+                if (asLong >= cutoff) pruned.put(key, obj.optString(key))
+            }
+            prefs[HOUR_SOURCE_PATHS] = pruned.toString()
+        }
+    }
+
+    suspend fun getHourSourcePaths(): Map<Long, String> {
+        val raw = context.dataStore.data.map { it[HOUR_SOURCE_PATHS] ?: "{}" }.first()
+        return try {
+            val obj = org.json.JSONObject(raw)
+            buildMap {
+                for (key in obj.keys()) {
+                    val asLong = key.toLongOrNull() ?: continue
+                    put(asLong, obj.optString(key))
+                }
+            }
+        } catch (e: Exception) {
+            emptyMap()
+        }
     }
 
     private fun parseSnapshots(raw: String): List<DeviceTotalSnapshot> {
