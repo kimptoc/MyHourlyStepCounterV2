@@ -8,7 +8,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.PowerManager
-import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.CoroutineScope
@@ -35,6 +34,7 @@ import com.example.myhourlystepcounterv2.R
 import com.example.myhourlystepcounterv2.data.StepPreferences
 import com.example.myhourlystepcounterv2.StepTrackerConfig
 import com.example.myhourlystepcounterv2.PermissionHelper
+import com.example.myhourlystepcounterv2.getCurrentBootCount
 import com.example.myhourlystepcounterv2.resolveKnownTotalForInitialization
 
 class StepCounterForegroundService : android.app.Service() {
@@ -493,7 +493,7 @@ class StepCounterForegroundService : android.app.Service() {
             sourcePathReader = { preferences.getHourSourcePaths() }
         )
         scope.launch {
-            val bootCount = getCurrentBootCount()
+            val bootCount = getCurrentBootCount(contentResolver)
             val savedBootCount = preferences.lastKnownBootCount.first()
             if (bootCount > 0 && savedBootCount <= 0) {
                 preferences.saveLastKnownBootCount(bootCount)
@@ -519,7 +519,7 @@ class StepCounterForegroundService : android.app.Service() {
             preferences = preferences,
             sensorManager = sensorManager,
             repository = repository,
-            getCurrentBootCount = { getCurrentBootCount() },
+            getCurrentBootCount = { getCurrentBootCount(contentResolver) },
             acquireWakeLock = { reason -> acquireShortWakeLock(reason) },
             releaseWakeLock = { token, reason -> releaseShortWakeLock(token, reason) },
             onNotificationRefresh = { updateNotificationImmediately() },
@@ -1079,7 +1079,7 @@ class StepCounterForegroundService : android.app.Service() {
             set(java.util.Calendar.MILLISECOND, 0)
         }.timeInMillis
         val savedBootCount = preferences.lastKnownBootCount.first()
-        val currentBootCount = getCurrentBootCount()
+        val currentBootCount = getCurrentBootCount(contentResolver)
         if (savedBootCount <= 0 && currentBootCount > 0) {
             preferences.saveLastKnownBootCount(currentBootCount)
         }
@@ -1477,14 +1477,6 @@ class StepCounterForegroundService : android.app.Service() {
         forceReleaseWakeLock()
         // Don't stop the singleton sensor - ViewModel may still be using it
         scope.cancel()
-    }
-
-    private fun getCurrentBootCount(): Int {
-        return try {
-            Settings.Global.getInt(contentResolver, Settings.Global.BOOT_COUNT)
-        } catch (_: Exception) {
-            -1
-        }
     }
 
     private suspend fun saveCurrentHourCheckpoint(currentDeviceTotal: Int) {

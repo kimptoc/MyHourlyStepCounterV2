@@ -279,6 +279,21 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                                         "Missed-boundary close did not advance the hour (still $hourTimestampAfterClose). " +
                                                 "Falling back to seed-only."
                                     )
+
+                                    // Mirror the service's fallback: the hour this offset applied
+                                    // to is over, so a stale offset must not ride into the fresh
+                                    // hour being seeded here (would inflate its total with steps
+                                    // that belong to the previous hour).
+                                    val staleOffset = preferences.currentHourPreRebootOffset.first()
+                                    if (staleOffset > 0) {
+                                        preferences.saveCurrentHourPreRebootOffset(0)
+                                        sensorManager.setPreRebootOffset(0)
+                                        android.util.Log.i(
+                                            "StepCounter",
+                                            "Cleared stale preRebootOffset=$staleOffset (hour changed)"
+                                        )
+                                    }
+
                                     preferences.saveHourData(
                                         hourStartStepCount = actualDeviceSteps,
                                         currentTimestamp = currentHourTimestamp,

@@ -20,10 +20,10 @@ fun resolveKnownTotalForInitialization(
 }
 
 /**
- * Reads the device's boot count, used to detect a reboot between two readings. Shared by
+ * Reads the device's boot count, used to detect a reboot between two readings. Both
  * [com.example.myhourlystepcounterv2.services.StepCounterForegroundService] and
- * [com.example.myhourlystepcounterv2.ui.StepCounterViewModel] so both cold-start paths agree on
- * what a reboot looks like.
+ * [com.example.myhourlystepcounterv2.ui.StepCounterViewModel] call this one function — not a
+ * copy each — so their cold-start paths cannot silently drift apart on what a reboot looks like.
  */
 fun getCurrentBootCount(contentResolver: android.content.ContentResolver): Int {
     return try {
