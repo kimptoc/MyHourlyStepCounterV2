@@ -11,9 +11,11 @@ import com.example.myhourlystepcounterv2.data.StepDatabase
 import com.example.myhourlystepcounterv2.data.StepEntity
 import com.example.myhourlystepcounterv2.data.StepPreferences
 import com.example.myhourlystepcounterv2.data.StepRepository
+import com.example.myhourlystepcounterv2.getCurrentBootCount
 import com.example.myhourlystepcounterv2.resolveKnownTotalForInitialization
 import com.example.myhourlystepcounterv2.sensor.StepSensorManager
 import com.example.myhourlystepcounterv2.worker.WorkManagerScheduler
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,11 +27,14 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.util.Calendar
 
 class StepCounterViewModel(private val repository: StepRepository) : ViewModel() {
     private lateinit var sensorManager: StepSensorManager
     private lateinit var preferences: StepPreferences
+    private lateinit var hourBoundaryCloser: com.example.myhourlystepcounterv2.services.HourBoundaryCloser
     private val uiDbWritesEnabled = false
     private val sensorSyncTimeoutMs = 15_000L
     private val freshEventWindowMs = 5_000L
@@ -113,6 +118,13 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
 
         sensorManager = StepSensorManager.getInstance(context)
         preferences = StepPreferences(context)
+        hourBoundaryCloser = com.example.myhourlystepcounterv2.services.HourBoundaryCloser(
+            preferences = preferences,
+            sensorManager = sensorManager,
+            repository = repository,
+            getCurrentBootCount = { getCurrentBootCount(context.contentResolver) },
+            logTag = "StepCounter"
+        )
 
         viewModelScope.launch {
             preferences.hourlyStepGoal.collect { _hourlyStepGoal.value = it }
@@ -191,60 +203,100 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                     set(Calendar.MILLISECOND, 0)
                 }.timeInMillis
                 val currentStartOfDay = getStartOfDay()
-                val sensorState = sensorManager.sensorState.value
 
-                when {
-                    sensorState.isInitialized && shouldSyncTimestamp(
-                        sensorInitialized = sensorState.isInitialized,
-                        sensorBaseline = sensorState.lastHourStartStepCount,
-                        sensorCurrentSteps = sensorState.currentHourSteps,
-                        maxStepsPerHour = StepTrackerConfig.MAX_STEPS_PER_HOUR
-                    ) -> {
-                        if (currentHourTimestamp != savedHourTimestamp) {
-                            preferences.saveCurrentHourTimestamp(currentHourTimestamp)
-                            android.util.Log.i(
-                                "StepCounter",
-                                "FG service tracking - synced timestamp only (hour=$currentHourTimestamp)"
-                            )
+                // Coordinated with StepCounterForegroundService via the same mutex: a
+                // launcher-tap cold start runs this exact decision, and used to seed the new
+                // hour directly in the "else" branch below without ever closing the completed
+                // one — the same issue #25 the service's OS-restart cold start had. Whichever
+                // process (this ViewModel, or the service) gets here first now closes it.
+                //
+                // Off Dispatchers.Main.immediate (viewModelScope's default): a real close can
+                // run a couple of Room writes and up to two 2-second sensor-flush delays while
+                // holding the mutex, which would otherwise block the service's onStartCommand
+                // check and its boundary loop for that whole window.
+                withContext(Dispatchers.Default) {
+                    com.example.myhourlystepcounterv2.services.HourBoundaryCloser.mutex.withLock {
+                        val sensorState = sensorManager.sensorState.value
+
+                        when {
+                            sensorState.isInitialized && shouldSyncTimestamp(
+                                sensorInitialized = sensorState.isInitialized,
+                                sensorBaseline = sensorState.lastHourStartStepCount,
+                                sensorCurrentSteps = sensorState.currentHourSteps,
+                                maxStepsPerHour = StepTrackerConfig.MAX_STEPS_PER_HOUR
+                            ) -> {
+                                if (currentHourTimestamp != savedHourTimestamp) {
+                                    preferences.saveCurrentHourTimestamp(currentHourTimestamp)
+                                    android.util.Log.i(
+                                        "StepCounter",
+                                        "FG service tracking - synced timestamp only (hour=$currentHourTimestamp)"
+                                    )
+                                }
+                            }
+
+                            !sensorState.isInitialized && savedHourTimestamp == currentHourTimestamp -> {
+                                val baselineCandidate = preferences.hourStartStepCount.first()
+                                val baseline = if (baselineCandidate > 0) baselineCandidate else actualDeviceSteps
+                                val savedTotal = preferences.totalStepsDevice.first()
+                                val hasFreshSensorEvent = sensorManager.getLastSensorEventTime() > 0L
+                                val knownTotal = resolveKnownTotalForInitialization(
+                                    savedTotal = savedTotal,
+                                    baseline = baseline,
+                                    currentDeviceSteps = actualDeviceSteps,
+                                    hasFreshSensorEvent = hasFreshSensorEvent
+                                )
+
+                                sensorManager.setLastHourStartStepCount(baseline)
+                                sensorManager.setLastKnownStepCount(knownTotal)
+                                sensorManager.markInitialized()
+                                preferences.saveCurrentHourTimestamp(currentHourTimestamp)
+                                android.util.Log.i(
+                                    "StepCounter",
+                                    "FG service had fresh prefs - seeded sensor from saved baseline=$baseline, total=$knownTotal"
+                                )
+                            }
+
+                            else -> {
+                                // Different hour, or no saved hour at all. Close any completed hour
+                                // through the shared machinery before seeding — see the comment
+                                // above and HourBoundaryCloser's KDoc (issue #25 part 2).
+                                android.util.Log.w(
+                                    "StepCounter",
+                                    "Cold start or stale prefs detected (saved=$savedHourTimestamp, current=$currentHourTimestamp). " +
+                                            "Closing any completed hour before seeding from current device steps=$actualDeviceSteps"
+                                )
+                                hourBoundaryCloser.checkMissedHourBoundariesLocked()
+
+                                val hourTimestampAfterClose = preferences.currentHourTimestamp.first()
+                                if (com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion
+                                        .needsColdStartSeedFallback(hourTimestampAfterClose, currentHourTimestamp)
+                                ) {
+                                    // The close attempt left the saved hour unadvanced (already
+                                    // processed, or no usable counter to reset with). The sensor
+                                    // still has to be initialized one way or another.
+                                    android.util.Log.w(
+                                        "StepCounter",
+                                        "Missed-boundary close did not advance the hour (still $hourTimestampAfterClose). " +
+                                                "Falling back to seed-only."
+                                    )
+                                    preferences.saveHourData(
+                                        hourStartStepCount = actualDeviceSteps,
+                                        currentTimestamp = currentHourTimestamp,
+                                        totalSteps = actualDeviceSteps
+                                    )
+                                    sensorManager.setLastHourStartStepCount(actualDeviceSteps)
+                                    sensorManager.setLastKnownStepCount(actualDeviceSteps)
+                                    sensorManager.markInitialized()
+                                } else {
+                                    sensorManager.markInitialized()
+                                    android.util.Log.i(
+                                        "StepCounter",
+                                        "Completed hour closed via missed-boundary handling; sensor marked initialized " +
+                                                "for new hour $hourTimestampAfterClose"
+                                    )
+                                }
+                            }
                         }
-                    }
-
-                    !sensorState.isInitialized && savedHourTimestamp == currentHourTimestamp -> {
-                        val baselineCandidate = preferences.hourStartStepCount.first()
-                        val baseline = if (baselineCandidate > 0) baselineCandidate else actualDeviceSteps
-                        val savedTotal = preferences.totalStepsDevice.first()
-                        val hasFreshSensorEvent = sensorManager.getLastSensorEventTime() > 0L
-                        val knownTotal = resolveKnownTotalForInitialization(
-                            savedTotal = savedTotal,
-                            baseline = baseline,
-                            currentDeviceSteps = actualDeviceSteps,
-                            hasFreshSensorEvent = hasFreshSensorEvent
-                        )
-
-                        sensorManager.setLastHourStartStepCount(baseline)
-                        sensorManager.setLastKnownStepCount(knownTotal)
-                        sensorManager.markInitialized()
-                        preferences.saveCurrentHourTimestamp(currentHourTimestamp)
-                        android.util.Log.i(
-                            "StepCounter",
-                            "FG service had fresh prefs - seeded sensor from saved baseline=$baseline, total=$knownTotal"
-                        )
-                    }
-
-                    else -> {
-                        android.util.Log.w(
-                            "StepCounter",
-                            "Cold start or stale prefs detected (saved=$savedHourTimestamp, current=$currentHourTimestamp). " +
-                                    "Seeding from current device steps=$actualDeviceSteps"
-                        )
-                        preferences.saveHourData(
-                            hourStartStepCount = actualDeviceSteps,
-                            currentTimestamp = currentHourTimestamp,
-                            totalSteps = actualDeviceSteps
-                        )
-                        sensorManager.setLastHourStartStepCount(actualDeviceSteps)
-                        sensorManager.setLastKnownStepCount(actualDeviceSteps)
-                        sensorManager.markInitialized()
                     }
                 }
 
