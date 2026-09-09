@@ -6,6 +6,7 @@ import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.C
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.shouldDelegateOrdinaryHourTransition
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.reconcileBoundarySaveWithDisplay
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.resolveBackfillHourSteps
+import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.needsColdStartSeedFallback
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -33,11 +34,10 @@ class HourlySwitchReconciliationTest {
     @Test
     fun shouldDelegateOrdinaryHourTransition_acceptsASavedTotalWhenTheSensorIsStillSilent() {
         // The predicate must not require a delivered sensor event: when only the saved total
-        // is real the handler can still close the hour from it.
-        //
-        // Scope: this pins the predicate alone. It does NOT show a cold start reaching this
-        // code — initializeSensorFromPreferences() usually advances currentHourTimestamp
-        // first, so the check resolves NONE. See the KDoc's KNOWN GAP note.
+        // is real the handler can still close the hour from it. Issue #25:
+        // initializeSensorFromPreferences() now calls checkMissedHourBoundariesLocked()
+        // (which reaches this predicate) before seeding a cold start, so this case is reached
+        // in practice, not just pinned in isolation.
         assertTrue(
             shouldDelegateOrdinaryHourTransition(
                 hoursDifference = 1L,
@@ -269,8 +269,8 @@ class HourlySwitchReconciliationTest {
 
     @Test
     fun resolveBoundaryAction_handsOffWhenOnlyTheSavedTotalIsReal() {
-        // Same scope caveat as the predicate test above: this fixes the decision, not the
-        // startup ordering that decides whether the decision is ever reached.
+        // Same note as the predicate test above: issue #25 made the cold-start init path call
+        // into this decision before seeding, so this case is reached at startup, not just here.
         assertEquals(
             BoundaryAction.DELEGATE_TO_HANDLER,
             action(currentDeviceTotal = 0, savedDeviceTotal = 60_325)
@@ -339,5 +339,28 @@ class HourlySwitchReconciliationTest {
             }
             saved += 7 * 60_000L
         }
+    }
+
+    // --- needsColdStartSeedFallback: issue #25, cold start advancing the hour without ---
+    // --- closing it. The close attempt must either land the hour on `now`, or the ---
+    // --- caller falls back to a plain seed rather than leaving the sensor uninitialized. ---
+
+    @Test
+    fun needsColdStartSeedFallback_falseWhenTheCloseAdvancedToNow() {
+        assertFalse(needsColdStartSeedFallback(currentHour, currentHour))
+    }
+
+    @Test
+    fun needsColdStartSeedFallback_trueWhenTheSavedHourWasUntouched() {
+        // BoundaryAction.NONE case: already marked processed by a prior crashed attempt,
+        // or no saved hour to close from — the timestamp never moves off the old value.
+        assertTrue(needsColdStartSeedFallback(previousHour, currentHour))
+    }
+
+    @Test
+    fun needsColdStartSeedFallback_trueWhenBackfillSkippedTheResetForWantOfACounter() {
+        // BACKFILL resolved but deviceTotalToUse <= 0: resetForNewHour is never called,
+        // so the saved hour stays behind even though a backfill attempt ran.
+        assertTrue(needsColdStartSeedFallback(currentHour - 4 * hourMs, currentHour))
     }
 }

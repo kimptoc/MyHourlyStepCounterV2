@@ -284,17 +284,13 @@ class StepCounterForegroundService : android.app.Service() {
          * handler does its own FIFO flush, falls back to the saved device total, and runs
          * [shouldBreakCounterContinuity] before trusting anything.
          *
-         * KNOWN GAP — this predicate does not by itself rescue a cold start. On a process
-         * restart `initializeSensorFromPreferences()` is launched from `onCreate` ahead of
-         * `onStartCommand`, and its different-hour branch calls `saveHourData()` with the new
-         * hour, so by the time the missed-boundary check reads `currentHourTimestamp` there is
-         * usually no gap left to see and [resolveBoundaryAction] returns
-         * [BoundaryAction.NONE] — the completed hour keeps its partial checkpoint row and its
-         * tail steps are absorbed into the new baseline. That advance-without-closing predates
-         * this hand-off and needs a startup-sequencing fix, not a change here; it is tracked
-         * as issue #25. What this path does reliably serve is the service that stayed alive
-         * through deep sleep, where the initializer returns early on `isInitialized` and never
-         * advances anything.
+         * FORMERLY A KNOWN GAP (issue #25) — this predicate alone did not rescue a cold start:
+         * `initializeSensorFromPreferences()`'s different-hour branch used to call
+         * `saveHourData()` with the new hour before any missed-boundary check ever ran, so the
+         * completed hour kept its partial checkpoint row and its tail steps were absorbed into
+         * the new baseline. That branch now calls `checkMissedHourBoundariesLocked()` (which
+         * reaches this predicate) before seeding, so a cold start is closed the same way as the
+         * service that stayed alive through deep sleep.
          *
          * What it does require: a counter to work from at all — either source, since the
          * handler falls back to the saved total — and no reboot. After a reboot the sensor
@@ -404,6 +400,20 @@ class StepCounterForegroundService : android.app.Service() {
             return measured
         }
 
+        /**
+         * Whether the cold-start init path's seed-only fallback must still run after it
+         * already tried to close the previous hour via [checkMissedHourBoundariesLocked].
+         * That attempt can resolve to [BoundaryAction.NONE] (already marked processed by a
+         * prior crashed attempt — see issue #25) or a [BoundaryAction.BACKFILL] with no
+         * usable device total, either of which leaves the saved hour timestamp unadvanced.
+         * The sensor still needs to end up initialized one way or another, so the caller
+         * falls back to a plain seed whenever the close left the timestamp behind.
+         */
+        fun needsColdStartSeedFallback(
+            hourTimestampAfterClose: Long,
+            currentHourTimestamp: Long
+        ): Boolean = hourTimestampAfterClose != currentHourTimestamp
+
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -503,21 +513,6 @@ class StepCounterForegroundService : android.app.Service() {
             android.util.Log.w("StepCounterFGSvc", "ACTIVITY_RECOGNITION permission missing - sensor listener not started")
         }
 
-        // If the OS killed the process and restarted for this service (without UI),
-        // the sensor singleton will be recreated with isInitialized=false.
-        // Seed it from saved preferences so currentStepCount emits correct values.
-        if (!sensorManager.sensorState.value.isInitialized) {
-            scope.launch {
-                try {
-                    initializeSensorFromPreferences()
-                } catch (e: Exception) {
-                    android.util.Log.e("StepCounterFGSvc", "Error initializing sensor from preferences", e)
-                }
-            }
-        } else {
-            android.util.Log.d("StepCounterFGSvc", "Sensor already initialized (ViewModel active), skipping service-side init")
-        }
-
         // Start foreground immediately with a placeholder notification
         try {
             val initialTimeline = buildTimelinePresentation(
@@ -536,6 +531,24 @@ class StepCounterForegroundService : android.app.Service() {
             scope.cancel()
             stopSelf()
             return
+        }
+
+        // If the OS killed the process and restarted for this service (without UI),
+        // the sensor singleton will be recreated with isInitialized=false.
+        // Seed it from saved preferences so currentStepCount emits correct values.
+        // Launched only after startForeground succeeds: this path can close the previous
+        // hour (issue #25) via boundaryMutex-guarded logic, and a scope.cancel() racing
+        // with that close could mark a boundary processed without ever saving its row.
+        if (!sensorManager.sensorState.value.isInitialized) {
+            scope.launch {
+                try {
+                    boundaryMutex.withLock { initializeSensorFromPreferences() }
+                } catch (e: Exception) {
+                    android.util.Log.e("StepCounterFGSvc", "Error initializing sensor from preferences", e)
+                }
+            }
+        } else {
+            android.util.Log.d("StepCounterFGSvc", "Sensor already initialized (ViewModel active), skipping service-side init")
         }
 
         scope.launch {
@@ -998,10 +1011,11 @@ class StepCounterForegroundService : android.app.Service() {
             val effectiveLastProcessed = maxOf(lastProcessed, lastProcessedBoundaryTimestamp)
 
             // Both counter sources are offered, because the boundary handler falls back to
-            // the saved total when the sensor has not reported in this process yet. That does
-            // not make this path the one that rescues a process restart — see the KNOWN GAP
-            // on shouldDelegateOrdinaryHourTransition and issue #25: on a cold start the hour
-            // has usually been advanced already, so this resolves NONE.
+            // the saved total when the sensor has not reported in this process yet. Issue #25:
+            // this path used to lose that race on a cold start, because
+            // initializeSensorFromPreferences() advanced the hour before this ever ran. It now
+            // calls this function directly (via checkMissedHourBoundariesLocked) before seeding,
+            // so this is the path that closes the completed hour on a process restart.
             val action = resolveBoundaryAction(
                 currentHourTimestamp = currentHourTimestamp,
                 savedHourTimestamp = savedHourTimestamp,
@@ -1650,7 +1664,39 @@ class StepCounterForegroundService : android.app.Service() {
                         "baseline=$baseline, knownTotal=$knownTotal, savedHour=${java.util.Date(savedHourTimestamp)}"
             )
         } else {
-            // Different hour, no reboot — clear any stale offset (new hour starts fresh)
+            // Different hour, no reboot. This cold start usually beats the boundary loop's
+            // timer and the alarm-driven check to the hour timestamp, so this is the only
+            // place left that will ever close the hour that just completed (issue #25:
+            // seeding straight into the new hour here silently discarded its tail steps).
+            // Delegate through the same missed-boundary machinery used elsewhere — it owns
+            // both the ordinary 1-hour switch and real multi-hour gaps — so the completed
+            // hour is closed with its real total instead of losing everything after its
+            // last checkpoint.
+            checkMissedHourBoundariesLocked()
+
+            val hourTimestampAfterClose = preferences.currentHourTimestamp.first()
+            if (!needsColdStartSeedFallback(hourTimestampAfterClose, currentHourTimestamp)) {
+                // The close advanced the saved hour to now — baseline and timestamp are
+                // already correct, the sensor just needs to be flipped into service.
+                sensorManager.markInitialized()
+                android.util.Log.i(
+                    "StepCounterFGSvc",
+                    "initializeSensorFromPreferences: Completed hour closed via missed-boundary handling; " +
+                            "sensor marked initialized for new hour ${java.util.Date(hourTimestampAfterClose)}"
+                )
+                return
+            }
+
+            // The close attempt left the saved hour unadvanced — already marked processed
+            // by a prior crashed attempt, or no usable device total to reset with. The
+            // sensor still has to be initialized one way or another, so fall back to a
+            // plain seed exactly as before this delegation was added.
+            android.util.Log.w(
+                "StepCounterFGSvc",
+                "initializeSensorFromPreferences: Missed-boundary close did not advance the hour " +
+                        "(still ${java.util.Date(hourTimestampAfterClose)}). Falling back to seed-only."
+            )
+
             val staleOffset = preferences.currentHourPreRebootOffset.first()
             if (staleOffset > 0) {
                 preferences.saveCurrentHourPreRebootOffset(0)
