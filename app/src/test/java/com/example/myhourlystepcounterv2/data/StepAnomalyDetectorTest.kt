@@ -124,6 +124,40 @@ class StepAnomalyDetectorTest {
         assertFalse(StepAnomalyDetector.isAnomalous(savedSteps = 140, bound = bound))
     }
 
+    /**
+     * Issue #28: MAX_TRUSTED_GAP_MS raised from 10 to 20 minutes after #33/#34/#36 tightened
+     * snapshot-value freshness. An hour whose widest gap falls in that 10-20 minute band used to
+     * be silently unjudgeable and now must fire on a genuinely fabricated value -- locking in the
+     * raise's actual effect rather than relying only on the default-parameter fixture tests above,
+     * which would keep passing at either threshold since their gaps sit well under 10 minutes.
+     */
+    @Test
+    fun isAnomalous_firesOnA15MinuteGap_thatThePreviousTenMinuteThresholdWouldHaveRefused() {
+        val bound = CorroboratedBound(delta = 0, maxSnapshotGapMs = 15 * 60_000L)
+
+        assertTrue(StepAnomalyDetector.isAnomalous(savedSteps = 10000, bound = bound))
+    }
+
+    @Test
+    fun isAnomalous_staysSilentBeyondTheRaisedTwentyMinuteThreshold() {
+        val bound = CorroboratedBound(delta = 0, maxSnapshotGapMs = 25 * 60_000L)
+
+        assertFalse(StepAnomalyDetector.isAnomalous(savedSteps = 10000, bound = bound))
+    }
+
+    /**
+     * The guard is a strict '>', not '>=' -- a gap exactly at MAX_TRUSTED_GAP_MS is still dense
+     * enough to trust, only a gap that exceeds it refuses to judge. Neither test above exercises
+     * this exact boundary (they sit inside and outside it), so this pins the '>' itself against
+     * the real constant rather than a literal copy of its value.
+     */
+    @Test
+    fun isAnomalous_treatsAGapExactlyAtTheThreshold_asStillJudgeable() {
+        val bound = CorroboratedBound(delta = 0, maxSnapshotGapMs = StepAnomalyDetector.MAX_TRUSTED_GAP_MS)
+
+        assertTrue(StepAnomalyDetector.isAnomalous(savedSteps = 10000, bound = bound))
+    }
+
     @Test
     fun corroboratedBound_isNullWhenTheLedgerDoesNotBracketTheHour() {
         val onlyBefore = listOf(DeviceTotalSnapshot(phantomHourStart - 60_000L, 263188))
