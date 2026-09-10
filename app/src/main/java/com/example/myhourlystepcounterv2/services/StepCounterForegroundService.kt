@@ -58,6 +58,19 @@ class StepCounterForegroundService : android.app.Service() {
         const val STARTUP_SYNC_TIMEOUT_MS = 15_000L
 
         /**
+         * How long the checkpoint loop waits for a confirmed fresh sensor callback after a
+         * FIFO flush, or after re-registering a dormant listener, before giving up and reading
+         * whatever total is currently cached (issue #28). Neither a flush being accepted nor a
+         * re-register call is a guarantee a reading lands within this window. Each timeout
+         * matches the loop's previous blind delay for that branch, so this does not extend the
+         * loop's worst-case wait — but unlike a blind delay, it also does not make the loop wait
+         * the full budget when the event arrives sooner, which shifts the resulting snapshot's
+         * timestamp earlier by up to the timeout's value on the common path.
+         */
+        const val FLUSH_CONFIRM_TIMEOUT_MS = 2_000L
+        const val RE_REGISTER_CONFIRM_TIMEOUT_MS = 3_000L
+
+        /**
          * Timeout for the short-lived work wake lock. A stalled coroutine can never pin
          * the CPU awake for longer than this because the lock auto-releases.
          */
@@ -610,16 +623,42 @@ class StepCounterForegroundService : android.app.Service() {
                             "StepCounterFGSvc",
                             "Sensor dormant for ${sensorAge / 1000}s. Re-registering listener."
                         )
+                        val reRegisterProbeStart = System.currentTimeMillis()
                         sensorManager.reRegisterListener()
-                        delay(3000) // Wait for first event after re-registration
+                        val reRegisterConfirmed =
+                            sensorManager.waitForSensorEventAfter(reRegisterProbeStart, RE_REGISTER_CONFIRM_TIMEOUT_MS)
+                        if (reRegisterConfirmed) {
+                            android.util.Log.d("StepCounterFGSvc", "reRegisterListener(): confirmed fresh event before snapshot")
+                        } else {
+                            android.util.Log.w(
+                                "StepCounterFGSvc",
+                                "reRegisterListener(): no confirmed event within ${RE_REGISTER_CONFIRM_TIMEOUT_MS}ms; " +
+                                        "snapshot may carry a stale deviceTotal under a fresh timestamp"
+                            )
+                        }
                     }
                     SensorAction.FLUSH -> {
                         android.util.Log.d(
                             "StepCounterFGSvc",
                             "Sensor data ${sensorAge / 1000}s old. Flushing FIFO before snapshot."
                         )
+                        val flushProbeStart = System.currentTimeMillis()
                         sensorManager.flushSensor()
-                        delay(2000)
+                        val flushConfirmed = sensorManager.waitForSensorEventAfter(flushProbeStart, FLUSH_CONFIRM_TIMEOUT_MS)
+                        if (flushConfirmed) {
+                            android.util.Log.d("StepCounterFGSvc", "flushSensor(): confirmed fresh event before snapshot")
+                        } else {
+                            // The OS accepted the flush, but no callback landed in time — the
+                            // snapshot below will stamp a fresh timestamp on a total that's
+                            // only confirmed as of the last real event, which can be stale by
+                            // up to the sensor's batching window. Proceeding anyway matches the
+                            // loop's prior behavior; the log line makes the gap auditable.
+                            android.util.Log.w(
+                                "StepCounterFGSvc",
+                                "flushSensor(): no confirmed event within ${FLUSH_CONFIRM_TIMEOUT_MS}ms; " +
+                                        "snapshot may carry a stale deviceTotal under a fresh timestamp"
+                            )
+                        }
                     }
                     SensorAction.NONE -> { /* sensor is fresh */ }
                 }
