@@ -58,8 +58,23 @@ object StepAnomalyDetector {
      * Widest snapshot gap that still counts as watching. Beyond this the device was almost
      * certainly dozing, [CorroboratedBound.delta] under-reports, and the bound is not
      * evidence of anything.
+     *
+     * Raised from 10 to 20 minutes (issue #28). Two independent on-device measurements a day
+     * apart (2026-09-09 and 2026-09-10) agree on the shape of the problem: the median snapshot
+     * cadence is ~5 minutes (CHECKPOINT_INTERVAL_MINUTES), but ordinary Doze stalls regularly
+     * push an hour's widest gap past a 10-minute threshold with no real anomaly present — 8/23
+     * bracketed hours judgeable (35%) in the first measurement, 10/23 (43%) in the second; the
+     * day-to-day difference is measurement noise, not an effect of any other change, since
+     * snapshot cadence is governed by the checkpoint loop's timing, not the sensor-value
+     * freshness work in #33/#34/#36. That freshness work is a precondition satisfied, not a
+     * measured density improvement: the issue's own sequencing was "trust the values first, then
+     * loosen the gap," and this raise is only justified now that step one is verified (see #36's
+     * on-device confirmation). 20 minutes recovers most of the coverage lost to the 10-minute
+     * threshold (70-78% across both measurements) while the flagship incident this guard exists
+     * to catch (StepAnomalyDetectorTest's phantom 03:00 hour, max gap ~395s) stays comfortably
+     * inside the bound either way.
      */
-    const val MAX_TRUSTED_GAP_MS = 10L * 60L * 1000L
+    const val MAX_TRUSTED_GAP_MS = 20L * 60L * 1000L
 
     /**
      * True when [savedSteps] exceeds what the counter provably moved, by more than the
