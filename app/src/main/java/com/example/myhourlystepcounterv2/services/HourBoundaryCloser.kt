@@ -5,8 +5,10 @@ import com.example.myhourlystepcounterv2.data.StepPreferences
 import com.example.myhourlystepcounterv2.data.StepRepository
 import com.example.myhourlystepcounterv2.sensor.StepSensorManager
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.BoundaryAction
+import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.FLUSH_CONFIRM_TIMEOUT_MS
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.FLUSH_THRESHOLD_MS
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.computeStepsForBoundarySave
+import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.confirmFreshSensorEvent
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.isBackfillReferencePlausible
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.isDeviceRebootDetected
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.reconcileBoundarySaveWithDisplay
@@ -15,7 +17,6 @@ import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.C
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.resolveBoundaryAction
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.resolvePreviousHourTimestamp
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.shouldBreakCounterContinuity
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -154,8 +155,15 @@ class HourBoundaryCloser(
                     logTag,
                     "checkMissedHourBoundaries: Sensor data stale (${sensorAgeForBackfill / 1000}s old). Flushing FIFO..."
                 )
+                val backfillFlushProbeStart = System.currentTimeMillis()
                 sensorManager.flushSensor()
-                delay(2000)
+                confirmFreshSensorEvent(
+                    sensorState = sensorManager.sensorState,
+                    probeStart = backfillFlushProbeStart,
+                    timeoutMs = FLUSH_CONFIRM_TIMEOUT_MS,
+                    label = "checkMissedHourBoundaries flush",
+                    logTag = logTag
+                )
             }
 
             val currentDeviceTotal = sensorManager.getCurrentTotalSteps()
@@ -449,8 +457,15 @@ class HourBoundaryCloser(
                     logTag,
                     "handleHourBoundary: Sensor data stale (${sensorAgeAtBoundary / 1000}s old). Flushing FIFO..."
                 )
+                val boundaryFlushProbeStart = System.currentTimeMillis()
                 sensorManager.flushSensor()
-                delay(2000) // Wait for flush callback to deliver via onSensorChanged
+                confirmFreshSensorEvent(
+                    sensorState = sensorManager.sensorState,
+                    probeStart = boundaryFlushProbeStart,
+                    timeoutMs = FLUSH_CONFIRM_TIMEOUT_MS,
+                    label = "handleHourBoundary flush",
+                    logTag = logTag
+                )
                 val postFlushAge = System.currentTimeMillis() - sensorManager.getLastSensorEventTime()
                 android.util.Log.d(
                     logTag,
