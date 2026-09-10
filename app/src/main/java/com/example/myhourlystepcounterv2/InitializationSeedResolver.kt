@@ -18,3 +18,17 @@ fun resolveKnownTotalForInitialization(
         maxOf(savedTotal, baseline, currentDeviceSteps)
     }
 }
+
+/**
+ * Reads the device's boot count, used to detect a reboot between two readings. Both
+ * [com.example.myhourlystepcounterv2.services.StepCounterForegroundService] and
+ * [com.example.myhourlystepcounterv2.ui.StepCounterViewModel] call this one function — not a
+ * copy each — so their cold-start paths cannot silently drift apart on what a reboot looks like.
+ */
+fun getCurrentBootCount(contentResolver: android.content.ContentResolver): Int {
+    return try {
+        android.provider.Settings.Global.getInt(contentResolver, android.provider.Settings.Global.BOOT_COUNT)
+    } catch (_: Exception) {
+        -1
+    }
+}
