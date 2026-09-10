@@ -69,10 +69,11 @@ object StepAnomalyDetector {
      * freshness work in #33/#34/#36. That freshness work is a precondition satisfied, not a
      * measured density improvement: the issue's own sequencing was "trust the values first, then
      * loosen the gap," and this raise is only justified now that step one is verified (see #36's
-     * on-device confirmation). 20 minutes recovers most of the coverage lost to the 10-minute
-     * threshold (70-78% across both measurements) while the flagship incident this guard exists
-     * to catch (StepAnomalyDetectorTest's phantom 03:00 hour, max gap ~395s) stays comfortably
-     * inside the bound either way.
+     * on-device confirmation). At the 20-minute mark specifically, the two measurements bracket
+     * each other -- 78% (18/23) in the original issue's own sensitivity table, 70% (16/23) in
+     * this session's re-measurement -- while the flagship incident this guard exists to catch
+     * (StepAnomalyDetectorTest's phantom 03:00 hour, max gap ~395s) stays comfortably inside the
+     * bound either way.
      */
     const val MAX_TRUSTED_GAP_MS = 20L * 60L * 1000L
 

@@ -145,6 +145,19 @@ class StepAnomalyDetectorTest {
         assertFalse(StepAnomalyDetector.isAnomalous(savedSteps = 10000, bound = bound))
     }
 
+    /**
+     * The guard is a strict '>', not '>=' -- a gap exactly at MAX_TRUSTED_GAP_MS is still dense
+     * enough to trust, only a gap that exceeds it refuses to judge. Neither test above exercises
+     * this exact boundary (they sit inside and outside it), so this pins the '>' itself against
+     * the real constant rather than a literal copy of its value.
+     */
+    @Test
+    fun isAnomalous_treatsAGapExactlyAtTheThreshold_asStillJudgeable() {
+        val bound = CorroboratedBound(delta = 0, maxSnapshotGapMs = StepAnomalyDetector.MAX_TRUSTED_GAP_MS)
+
+        assertTrue(StepAnomalyDetector.isAnomalous(savedSteps = 10000, bound = bound))
+    }
+
     @Test
     fun corroboratedBound_isNullWhenTheLedgerDoesNotBracketTheHour() {
         val onlyBefore = listOf(DeviceTotalSnapshot(phantomHourStart - 60_000L, 263188))
