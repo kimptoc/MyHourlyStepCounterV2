@@ -58,6 +58,19 @@ class StepCounterForegroundService : android.app.Service() {
         const val STARTUP_SYNC_TIMEOUT_MS = 15_000L
 
         /**
+         * How long the checkpoint loop waits for a confirmed fresh sensor callback after a
+         * FIFO flush, or after re-registering a dormant listener, before giving up and reading
+         * whatever total is currently cached (issue #28). Neither a flush being accepted nor a
+         * re-register call is a guarantee a reading lands within this window. Each timeout
+         * matches the loop's previous blind delay for that branch, so this does not extend the
+         * loop's worst-case wait — but unlike a blind delay, it also does not make the loop wait
+         * the full budget when the event arrives sooner, which shifts the resulting snapshot's
+         * timestamp earlier by up to the timeout's value on the common path.
+         */
+        const val FLUSH_CONFIRM_TIMEOUT_MS = 2_000L
+        const val RE_REGISTER_CONFIRM_TIMEOUT_MS = 3_000L
+
+        /**
          * Timeout for the short-lived work wake lock. A stalled coroutine can never pin
          * the CPU awake for longer than this because the lock auto-releases.
          */
@@ -73,6 +86,42 @@ class StepCounterForegroundService : android.app.Service() {
                 sensorAgeMs > FLUSH_THRESHOLD_MS -> SensorAction.FLUSH
                 else -> SensorAction.NONE
             }
+        }
+
+        /**
+         * Waits for a fresh sensor callback to confirm a flush or re-register actually delivered
+         * a reading, logging the outcome either way (issue #28). Shared between the FLUSH and
+         * RE_REGISTER branches of the checkpoint loop, which otherwise repeat the same wait +
+         * success/failure log shape and can drift apart if one is edited without the other.
+         *
+         * Confirms on the *first* callback with a newer timestamp, not on the FIFO fully
+         * draining. If a flush or re-register ever delivered a burst of several queued readings
+         * in quick succession, the caller's subsequent read could still land ahead of a
+         * still-in-flight later reading in that burst — the same stale-under-fresh-timestamp
+         * shape this function exists to close, just bounded by the burst's own internal spacing
+         * rather than the full multi-minute gap this fix targets. On this device, every captured
+         * flush/re-register in issue #28's investigation delivered exactly one callback, so this
+         * is a theoretical residual, not an observed one; revisit if snapshot staleness is still
+         * seen after this fix ships.
+         */
+        suspend fun confirmFreshSensorEvent(
+            sensorState: kotlinx.coroutines.flow.StateFlow<com.example.myhourlystepcounterv2.sensor.SensorState>,
+            probeStart: Long,
+            timeoutMs: Long,
+            label: String,
+            logTag: String = "StepCounterFGSvc"
+        ): Boolean {
+            val confirmed = com.example.myhourlystepcounterv2.sensor.waitForFreshSensorEvent(sensorState, probeStart, timeoutMs)
+            if (confirmed) {
+                android.util.Log.d(logTag, "$label: confirmed fresh event before snapshot")
+            } else {
+                android.util.Log.w(
+                    logTag,
+                    "$label: no confirmed event within ${timeoutMs}ms; snapshot may carry a stale deviceTotal " +
+                            "under a fresh timestamp"
+                )
+            }
+            return confirmed
         }
 
         fun resolvePreviousHourTimestamp(
@@ -610,16 +659,31 @@ class StepCounterForegroundService : android.app.Service() {
                             "StepCounterFGSvc",
                             "Sensor dormant for ${sensorAge / 1000}s. Re-registering listener."
                         )
+                        val reRegisterProbeStart = System.currentTimeMillis()
                         sensorManager.reRegisterListener()
-                        delay(3000) // Wait for first event after re-registration
+                        confirmFreshSensorEvent(
+                            sensorState = sensorManager.sensorState,
+                            probeStart = reRegisterProbeStart,
+                            timeoutMs = RE_REGISTER_CONFIRM_TIMEOUT_MS,
+                            label = "reRegisterListener()"
+                        )
                     }
                     SensorAction.FLUSH -> {
                         android.util.Log.d(
                             "StepCounterFGSvc",
                             "Sensor data ${sensorAge / 1000}s old. Flushing FIFO before snapshot."
                         )
+                        val flushProbeStart = System.currentTimeMillis()
                         sensorManager.flushSensor()
-                        delay(2000)
+                        // The OS accepting a flush isn't a guarantee a reading lands within the
+                        // timeout below — confirmFreshSensorEvent logs that gap when it happens
+                        // rather than silently proceeding, which is what this branch used to do.
+                        confirmFreshSensorEvent(
+                            sensorState = sensorManager.sensorState,
+                            probeStart = flushProbeStart,
+                            timeoutMs = FLUSH_CONFIRM_TIMEOUT_MS,
+                            label = "flushSensor()"
+                        )
                     }
                     SensorAction.NONE -> { /* sensor is fresh */ }
                 }
