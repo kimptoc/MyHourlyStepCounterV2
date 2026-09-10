@@ -144,18 +144,32 @@ class StepCounterForegroundService : android.app.Service() {
          * doReRegister lambda can land in the same real millisecond regardless of how much virtual
          * time the test simulates passing — tripping the strict '>' in waitForFreshSensorEvent and
          * making a confirming case look like a timeout. A fake clock sidesteps that entirely.
+         *
+         * [doFlush] returns the platform's own accept/reject signal (SensorManager.flush()'s
+         * result): false means no callback is coming at all, so this skips straight to the
+         * re-register fallback instead of waiting out the full flush budget for nothing.
+         *
+         * Refuses to escalate to re-register when the sensor has never reported an event yet
+         * ([sensorState]'s lastSensorEventTimeMs == 0, checked *after* the flush attempt so a
+         * flush that itself delivered the first-ever event still counts as fresh above) —
+         * matching determineSensorAction's own `lastEventTimeMs == 0 -> NONE` guard for the
+         * checkpoint loop. The flush attempt (and its wait) still runs either way: unlike the
+         * checkpoint loop, which just retries in 5 minutes for free, this call site's caller
+         * closes an hour on whatever total is available right now, so skipping the flush's own
+         * wait here would remove real time a freshly-registered listener needs to fire its first
+         * callback, not just an optimization for an already-initialized sensor.
          */
         suspend fun confirmFreshSensorReadingWithFallback(
             sensorState: kotlinx.coroutines.flow.StateFlow<com.example.myhourlystepcounterv2.sensor.SensorState>,
-            doFlush: () -> Unit,
+            doFlush: () -> Boolean,
             doReRegister: () -> Unit,
             label: String,
             logTag: String = "StepCounterFGSvc",
             now: () -> Long = { System.currentTimeMillis() }
         ): Boolean {
             val flushProbeStart = now()
-            doFlush()
-            val flushConfirmed = confirmFreshSensorEvent(
+            val flushAccepted = doFlush()
+            val flushConfirmed = flushAccepted && confirmFreshSensorEvent(
                 sensorState = sensorState,
                 probeStart = flushProbeStart,
                 timeoutMs = FLUSH_CONFIRM_TIMEOUT_MS,
@@ -164,9 +178,18 @@ class StepCounterForegroundService : android.app.Service() {
             )
             if (flushConfirmed) return true
 
+            if (sensorState.value.lastSensorEventTimeMs == 0L) {
+                android.util.Log.d(logTag, "$label: sensor still hasn't reported; not re-registering an initializing listener")
+                return false
+            }
+
             android.util.Log.w(
                 logTag,
-                "$label: flush didn't confirm within ${FLUSH_CONFIRM_TIMEOUT_MS}ms; falling back to re-register"
+                if (flushAccepted) {
+                    "$label: flush didn't confirm within ${FLUSH_CONFIRM_TIMEOUT_MS}ms; falling back to re-register"
+                } else {
+                    "$label: flush request rejected by the platform; falling back to re-register"
+                }
             )
             val reRegisterProbeStart = now()
             doReRegister()
