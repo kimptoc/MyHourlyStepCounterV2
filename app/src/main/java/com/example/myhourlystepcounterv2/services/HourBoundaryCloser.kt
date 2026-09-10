@@ -67,8 +67,9 @@ class HourBoundaryCloser(
         mutex.withLock { checkMissedHourBoundariesLocked() }
     }
 
-    /** Body of [checkMissedHourBoundaries]; the caller must already hold [mutex]. */
     /**
+     * Body of [checkMissedHourBoundaries]; the caller must already hold [mutex].
+     *
      * [onFreshConfirmAttempted] fires exactly once, right before the backfill branch attempts a
      * flush/re-register cycle -- used by [handleHourBoundaryLocked]'s own gapHours>1 nested call
      * to this function (issue #36 review) so it can skip its own redundant attempt against a
