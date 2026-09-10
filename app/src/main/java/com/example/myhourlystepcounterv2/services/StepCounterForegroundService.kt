@@ -124,6 +124,61 @@ class StepCounterForegroundService : android.app.Service() {
             return confirmed
         }
 
+        /**
+         * Tries to get a confirmed fresh sensor reading via flush, falling back to re-registering
+         * the listener if the flush doesn't confirm within its budget (issue #36). On-device
+         * evidence gathered after #33/#34 shipped found flush alone never confirmed in 8 attempts
+         * on this device while stationary, whereas re-registering confirmed in all 4 attempts —
+         * registration itself reliably triggers an immediate callback as a side effect. Scoped to
+         * HourBoundaryCloser's two flush sites (backfill reference total, permanent hour-close
+         * save); the checkpoint loop already has its own coarser time-based escalation to
+         * RE_REGISTER via DORMANT_THRESHOLD_MS and isn't changed here.
+         *
+         * Takes the flush/re-register actions as lambdas rather than a StepSensorManager directly
+         * so this stays testable the same way confirmFreshSensorEvent is (a MutableStateFlow the
+         * test drives, standing in for the real sensor callbacks). [now] is likewise injectable —
+         * defaults to the real clock in production, but a test needs a fake clock here rather than
+         * System.currentTimeMillis(): under `runTest`, coroutine delays run on virtual time while
+         * System.currentTimeMillis() is real wall-clock time, so a probe-start captured internally
+         * via the real clock and a "fresh" timestamp set synchronously from a test's doFlush/
+         * doReRegister lambda can land in the same real millisecond regardless of how much virtual
+         * time the test simulates passing — tripping the strict '>' in waitForFreshSensorEvent and
+         * making a confirming case look like a timeout. A fake clock sidesteps that entirely.
+         */
+        suspend fun confirmFreshSensorReadingWithFallback(
+            sensorState: kotlinx.coroutines.flow.StateFlow<com.example.myhourlystepcounterv2.sensor.SensorState>,
+            doFlush: () -> Unit,
+            doReRegister: () -> Unit,
+            label: String,
+            logTag: String = "StepCounterFGSvc",
+            now: () -> Long = { System.currentTimeMillis() }
+        ): Boolean {
+            val flushProbeStart = now()
+            doFlush()
+            val flushConfirmed = confirmFreshSensorEvent(
+                sensorState = sensorState,
+                probeStart = flushProbeStart,
+                timeoutMs = FLUSH_CONFIRM_TIMEOUT_MS,
+                label = "$label flush",
+                logTag = logTag
+            )
+            if (flushConfirmed) return true
+
+            android.util.Log.w(
+                logTag,
+                "$label: flush didn't confirm within ${FLUSH_CONFIRM_TIMEOUT_MS}ms; falling back to re-register"
+            )
+            val reRegisterProbeStart = now()
+            doReRegister()
+            return confirmFreshSensorEvent(
+                sensorState = sensorState,
+                probeStart = reRegisterProbeStart,
+                timeoutMs = RE_REGISTER_CONFIRM_TIMEOUT_MS,
+                label = "$label re-register fallback",
+                logTag = logTag
+            )
+        }
+
         fun resolvePreviousHourTimestamp(
             currentHourTimestamp: Long,
             savedHourTimestamp: Long

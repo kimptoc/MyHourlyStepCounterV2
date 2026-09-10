@@ -2,6 +2,7 @@ package com.example.myhourlystepcounterv2.services
 
 import com.example.myhourlystepcounterv2.sensor.SensorState
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.confirmFreshSensorEvent
+import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.confirmFreshSensorReadingWithFallback
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -58,5 +59,80 @@ class ConfirmFreshSensorEventTest {
         )
 
         assertFalse(result)
+    }
+}
+
+/**
+ * Issue #36: on-device evidence found flush alone never confirmed (0/8) while re-registering the
+ * listener always did (4/4), so HourBoundaryCloser's two flush sites now fall back to
+ * reRegisterListener() when a flush doesn't confirm in time.
+ *
+ * Uses a fake `now` clock with small literal timestamps, same as ConfirmFreshSensorEventTest
+ * above and StepSensorSyncWaitTest -- not System.currentTimeMillis(). An earlier version of this
+ * test used the real clock and was flaky: under `runTest`, coroutine delays run on virtual time
+ * while System.currentTimeMillis() is real wall-clock time, so a probe-start captured via the real
+ * clock and a same-call "fresh" timestamp could land in the same real millisecond regardless of
+ * virtual time simulated, tripping the strict '>' in waitForFreshSensorEvent. The fake clock
+ * sidesteps that rather than papering over it with a timestamp fudge.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33])
+class ConfirmFreshSensorReadingWithFallbackTest {
+
+    @Test
+    fun returnsTrue_withoutFallingBackToReRegister_whenFlushConfirmsImmediately() = runTest {
+        val state = MutableStateFlow(SensorState(lastSensorEventTimeMs = 100L))
+        var reRegisterCalled = false
+
+        val result = confirmFreshSensorReadingWithFallback(
+            sensorState = state,
+            doFlush = { state.value = SensorState(lastSensorEventTimeMs = 300L) },
+            doReRegister = { reRegisterCalled = true },
+            label = "test",
+            now = { 200L }
+        )
+
+        assertTrue(result)
+        assertFalse("Flush confirmed; re-register fallback should not have been attempted", reRegisterCalled)
+    }
+
+    @Test
+    fun fallsBackToReRegister_andReturnsTrue_whenFlushTimesOutButReRegisterConfirms() = runTest {
+        val state = MutableStateFlow(SensorState(lastSensorEventTimeMs = 100L))
+        var reRegisterCalled = false
+        var clock = 200L
+
+        val result = confirmFreshSensorReadingWithFallback(
+            sensorState = state,
+            doFlush = { /* no-op: simulates flush never delivering, per issue #36's evidence */ },
+            doReRegister = {
+                reRegisterCalled = true
+                state.value = SensorState(lastSensorEventTimeMs = 5_000L)
+            },
+            label = "test",
+            now = { clock.also { clock += 1 } }
+        )
+
+        assertTrue(result)
+        assertTrue("Flush timed out; re-register fallback should have been attempted", reRegisterCalled)
+    }
+
+    @Test
+    fun returnsFalse_afterAttemptingReRegisterFallback_whenNeitherConfirms() = runTest {
+        val state = MutableStateFlow(SensorState(lastSensorEventTimeMs = 100L))
+        var reRegisterCalled = false
+        var clock = 200L
+
+        val result = confirmFreshSensorReadingWithFallback(
+            sensorState = state,
+            doFlush = { },
+            doReRegister = { reRegisterCalled = true },
+            label = "test",
+            now = { clock.also { clock += 1 } }
+        )
+
+        assertFalse(result)
+        assertTrue("Fallback should still have been attempted even though it also didn't confirm", reRegisterCalled)
     }
 }
