@@ -88,6 +88,42 @@ class StepCounterForegroundService : android.app.Service() {
             }
         }
 
+        /**
+         * Waits for a fresh sensor callback to confirm a flush or re-register actually delivered
+         * a reading, logging the outcome either way (issue #28). Shared between the FLUSH and
+         * RE_REGISTER branches of the checkpoint loop, which otherwise repeat the same wait +
+         * success/failure log shape and can drift apart if one is edited without the other.
+         *
+         * Confirms on the *first* callback with a newer timestamp, not on the FIFO fully
+         * draining. If a flush or re-register ever delivered a burst of several queued readings
+         * in quick succession, the caller's subsequent read could still land ahead of a
+         * still-in-flight later reading in that burst — the same stale-under-fresh-timestamp
+         * shape this function exists to close, just bounded by the burst's own internal spacing
+         * rather than the full multi-minute gap this fix targets. On this device, every captured
+         * flush/re-register in issue #28's investigation delivered exactly one callback, so this
+         * is a theoretical residual, not an observed one; revisit if snapshot staleness is still
+         * seen after this fix ships.
+         */
+        suspend fun confirmFreshSensorEvent(
+            sensorState: kotlinx.coroutines.flow.StateFlow<com.example.myhourlystepcounterv2.sensor.SensorState>,
+            probeStart: Long,
+            timeoutMs: Long,
+            label: String,
+            logTag: String = "StepCounterFGSvc"
+        ): Boolean {
+            val confirmed = com.example.myhourlystepcounterv2.sensor.waitForFreshSensorEvent(sensorState, probeStart, timeoutMs)
+            if (confirmed) {
+                android.util.Log.d(logTag, "$label: confirmed fresh event before snapshot")
+            } else {
+                android.util.Log.w(
+                    logTag,
+                    "$label: no confirmed event within ${timeoutMs}ms; snapshot may carry a stale deviceTotal " +
+                            "under a fresh timestamp"
+                )
+            }
+            return confirmed
+        }
+
         fun resolvePreviousHourTimestamp(
             currentHourTimestamp: Long,
             savedHourTimestamp: Long
@@ -625,17 +661,12 @@ class StepCounterForegroundService : android.app.Service() {
                         )
                         val reRegisterProbeStart = System.currentTimeMillis()
                         sensorManager.reRegisterListener()
-                        val reRegisterConfirmed =
-                            sensorManager.waitForSensorEventAfter(reRegisterProbeStart, RE_REGISTER_CONFIRM_TIMEOUT_MS)
-                        if (reRegisterConfirmed) {
-                            android.util.Log.d("StepCounterFGSvc", "reRegisterListener(): confirmed fresh event before snapshot")
-                        } else {
-                            android.util.Log.w(
-                                "StepCounterFGSvc",
-                                "reRegisterListener(): no confirmed event within ${RE_REGISTER_CONFIRM_TIMEOUT_MS}ms; " +
-                                        "snapshot may carry a stale deviceTotal under a fresh timestamp"
-                            )
-                        }
+                        confirmFreshSensorEvent(
+                            sensorState = sensorManager.sensorState,
+                            probeStart = reRegisterProbeStart,
+                            timeoutMs = RE_REGISTER_CONFIRM_TIMEOUT_MS,
+                            label = "reRegisterListener()"
+                        )
                     }
                     SensorAction.FLUSH -> {
                         android.util.Log.d(
@@ -644,21 +675,15 @@ class StepCounterForegroundService : android.app.Service() {
                         )
                         val flushProbeStart = System.currentTimeMillis()
                         sensorManager.flushSensor()
-                        val flushConfirmed = sensorManager.waitForSensorEventAfter(flushProbeStart, FLUSH_CONFIRM_TIMEOUT_MS)
-                        if (flushConfirmed) {
-                            android.util.Log.d("StepCounterFGSvc", "flushSensor(): confirmed fresh event before snapshot")
-                        } else {
-                            // The OS accepted the flush, but no callback landed in time — the
-                            // snapshot below will stamp a fresh timestamp on a total that's
-                            // only confirmed as of the last real event, which can be stale by
-                            // up to the sensor's batching window. Proceeding anyway matches the
-                            // loop's prior behavior; the log line makes the gap auditable.
-                            android.util.Log.w(
-                                "StepCounterFGSvc",
-                                "flushSensor(): no confirmed event within ${FLUSH_CONFIRM_TIMEOUT_MS}ms; " +
-                                        "snapshot may carry a stale deviceTotal under a fresh timestamp"
-                            )
-                        }
+                        // The OS accepting a flush isn't a guarantee a reading lands within the
+                        // timeout below — confirmFreshSensorEvent logs that gap when it happens
+                        // rather than silently proceeding, which is what this branch used to do.
+                        confirmFreshSensorEvent(
+                            sensorState = sensorManager.sensorState,
+                            probeStart = flushProbeStart,
+                            timeoutMs = FLUSH_CONFIRM_TIMEOUT_MS,
+                            label = "flushSensor()"
+                        )
                     }
                     SensorAction.NONE -> { /* sensor is fresh */ }
                 }
