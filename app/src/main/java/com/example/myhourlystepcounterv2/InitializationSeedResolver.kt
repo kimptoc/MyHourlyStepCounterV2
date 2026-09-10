@@ -1,5 +1,9 @@
 package com.example.myhourlystepcounterv2
 
+import com.example.myhourlystepcounterv2.data.StepPreferences
+import com.example.myhourlystepcounterv2.sensor.StepSensorManager
+import kotlinx.coroutines.flow.first
+
 /**
  * Resolves the total counter value used to seed in-memory sensor state at startup.
  *
@@ -31,4 +35,46 @@ fun getCurrentBootCount(contentResolver: android.content.ContentResolver): Int {
     } catch (_: Exception) {
         -1
     }
+}
+
+/**
+ * Restores a persisted pre-reboot step offset into sensor state on a same-hour cold start.
+ *
+ * Both [com.example.myhourlystepcounterv2.services.StepCounterForegroundService] and
+ * [com.example.myhourlystepcounterv2.ui.StepCounterViewModel] can be the first to seed the
+ * sensor for a given hour, so this lives here rather than as a copy in each — the same reason
+ * [getCurrentBootCount] does.
+ *
+ * Doesn't log the offset itself — every caller already folds it into its own seed-summary
+ * log line, so a log here would just double it up.
+ */
+suspend fun restorePersistedPreRebootOffset(
+    preferences: StepPreferences,
+    sensorManager: StepSensorManager
+): Int {
+    val persistedOffset = preferences.currentHourPreRebootOffset.first()
+    if (persistedOffset > 0) {
+        sensorManager.setPreRebootOffset(persistedOffset)
+    }
+    return persistedOffset
+}
+
+/**
+ * Clears a pre-reboot step offset that no longer applies because the hour it belonged to is
+ * over. Shared for the same reason [restorePersistedPreRebootOffset] is: both cold-start entry
+ * points fall back to this when a hand-off to [com.example.myhourlystepcounterv2.services.HourBoundaryCloser]
+ * doesn't advance the saved hour.
+ */
+suspend fun clearStalePreRebootOffset(
+    preferences: StepPreferences,
+    sensorManager: StepSensorManager,
+    logTag: String
+): Int {
+    val staleOffset = preferences.currentHourPreRebootOffset.first()
+    if (staleOffset > 0) {
+        preferences.saveCurrentHourPreRebootOffset(0)
+        sensorManager.setPreRebootOffset(0)
+        android.util.Log.i(logTag, "Cleared stale preRebootOffset=$staleOffset (hour changed)")
+    }
+    return staleOffset
 }
