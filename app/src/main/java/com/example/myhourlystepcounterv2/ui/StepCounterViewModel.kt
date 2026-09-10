@@ -14,6 +14,8 @@ import com.example.myhourlystepcounterv2.data.StepRepository
 import com.example.myhourlystepcounterv2.getCurrentBootCount
 import com.example.myhourlystepcounterv2.resolveKnownTotalForInitialization
 import com.example.myhourlystepcounterv2.sensor.StepSensorManager
+import com.example.myhourlystepcounterv2.wallClockHourTimestamp
+import com.example.myhourlystepcounterv2.wallClockStartOfDay
 import com.example.myhourlystepcounterv2.worker.WorkManagerScheduler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -25,6 +27,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.withLock
@@ -202,7 +205,7 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                     set(Calendar.SECOND, 0)
                     set(Calendar.MILLISECOND, 0)
                 }.timeInMillis
-                val currentStartOfDay = getStartOfDay()
+                val currentStartOfDay = wallClockStartOfDay()
 
                 // Coordinated with StepCounterForegroundService via the same mutex: a
                 // launcher-tap cold start runs this exact decision, and used to seed the new
@@ -380,10 +383,10 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
         viewModelScope.launch {
             dailyStepsFlow(
                 lastStartOfDay = preferences.lastStartOfDay,
-                currentHourTimestamp = preferences.currentHourTimestamp,
+                currentTime = _currentTime,
                 hourlySteps = _hourlySteps,
                 repository = repository,
-                fallbackStartOfDay = ::getStartOfDay
+                fallbackStartOfDay = ::wallClockStartOfDay
             ).collect { total ->
                 if (BuildConfig.DEBUG) {
                     android.util.Log.d("StepCounter", "Daily total calculated: $total")
@@ -392,18 +395,22 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
             }
         }
 
-        // Observe day history (database entries for today, excluding current hour)
+        // Observe day history (database entries for today, excluding current hour).
+        // Excludes by wall-clock hour, not preferences.currentHourTimestamp, for the same
+        // staleness reason as dailyStepsFlow (issue #27) — otherwise a stale preference lets a
+        // stray in-progress checkpoint row show up as a phantom completed hour in the list.
         viewModelScope.launch {
             combine(
                 preferences.lastStartOfDay,
-                preferences.currentHourTimestamp
-            ) { storedStartOfDay, currentHourTimestamp ->
-                val effectiveStartOfDay = if (storedStartOfDay > 0) storedStartOfDay else getStartOfDay()
-                Pair(effectiveStartOfDay, currentHourTimestamp)
-            }.flatMapLatest { (effectiveStartOfDay, currentHourTimestamp) ->
-                // Query now excludes the current hour
-                repository.getStepsForDay(effectiveStartOfDay, currentHourTimestamp)
-            }.collect { steps ->
+                _currentTime.map { wallClockHourTimestamp(it) }.distinctUntilChanged()
+            ) { storedStartOfDay, wallClockHour ->
+                val effectiveStartOfDay = if (storedStartOfDay > 0) storedStartOfDay else wallClockStartOfDay()
+                Pair(effectiveStartOfDay, wallClockHour)
+            }.distinctUntilChanged()
+                .flatMapLatest { (effectiveStartOfDay, wallClockHour) ->
+                    // Query now excludes the current hour
+                    repository.getStepsForDay(effectiveStartOfDay, wallClockHour)
+                }.collect { steps ->
                 if (BuildConfig.DEBUG) {
                     android.util.Log.d(
                         "StepCounter",
@@ -566,7 +573,7 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
      * initialize() won't be called again, so we need to detect closure here.
      */
     private suspend fun handleUiResumeClosure(currentDeviceTotal: Int) {
-        val currentStartOfDay = getStartOfDay()
+        val currentStartOfDay = wallClockStartOfDay()
         val lastOpenDate = preferences.lastOpenDate.first()
         val currentHourTimestamp = Calendar.getInstance().apply {
             set(Calendar.MINUTE, 0)
@@ -723,15 +730,6 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
         // System will clean up when app process is killed
     }
 
-    private fun getStartOfDay(): Long {
-        return Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }.timeInMillis
-    }
-
     private suspend fun saveHourlyStepsIfEnabled(timestamp: Long, steps: Int, reason: String) {
         if (!uiDbWritesEnabled) {
             android.util.Log.i(
@@ -748,24 +746,35 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
  * Builds the daily-step-count flow: the sum of the persisted steps for today (excluding the
  * current hour) plus the live current-hour steps.
  *
- * The Room query is keyed only on the start-of-day and current-hour timestamps, so it is
- * re-subscribed only when a day or hour boundary is crossed. Live step changes are combined
- * downstream as cheap arithmetic instead of tearing down and re-running the database query.
+ * Excludes by wall-clock hour, not `preferences.currentHourTimestamp` — that preference only
+ * advances once hour-boundary processing actually runs, and can lag the clock for a few minutes
+ * (device asleep, alarm not yet fired). The service's 5-minute checkpoint loop keys its partial
+ * row by wall-clock time regardless, so a stale preference here would fail to exclude that row
+ * from the sum while `hourlySteps` also still counts those same steps live — a double count,
+ * which is what made the Home total disagree with the (already wall-clock-keyed) notification
+ * (issue #27).
+ *
+ * The Room query is keyed only on the start-of-day and current wall-clock hour, so it is
+ * re-subscribed only when a day or hour boundary is crossed — `distinctUntilChanged` on the hour
+ * bucket means a clock that ticks every second still only re-triggers the query once per hour.
+ * Live step changes are combined downstream as cheap arithmetic instead of tearing down and
+ * re-running the database query.
  */
 internal fun dailyStepsFlow(
     lastStartOfDay: Flow<Long>,
-    currentHourTimestamp: Flow<Long>,
+    currentTime: Flow<Long>,
     hourlySteps: Flow<Int>,
     repository: StepRepository,
     fallbackStartOfDay: () -> Long
 ): Flow<Int> {
-    return combine(lastStartOfDay, currentHourTimestamp) { storedStartOfDay, currentHourTimestamp ->
+    val wallClockHour = currentTime.map { wallClockHourTimestamp(it) }.distinctUntilChanged()
+    return combine(lastStartOfDay, wallClockHour) { storedStartOfDay, hour ->
         val effectiveStartOfDay = if (storedStartOfDay > 0) storedStartOfDay else fallbackStartOfDay()
-        effectiveStartOfDay to currentHourTimestamp
+        effectiveStartOfDay to hour
     }
         .distinctUntilChanged()
-        .flatMapLatest { (effectiveStartOfDay, currentHourTimestamp) ->
-            repository.getTotalStepsForDayExcludingCurrentHour(effectiveStartOfDay, currentHourTimestamp)
+        .flatMapLatest { (effectiveStartOfDay, hour) ->
+            repository.getTotalStepsForDayExcludingCurrentHour(effectiveStartOfDay, hour)
         }
         .combine(hourlySteps) { dbTotal, hourSteps -> (dbTotal ?: 0) + hourSteps }
 }
