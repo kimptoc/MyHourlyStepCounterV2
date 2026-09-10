@@ -5,10 +5,9 @@ import com.example.myhourlystepcounterv2.data.StepPreferences
 import com.example.myhourlystepcounterv2.data.StepRepository
 import com.example.myhourlystepcounterv2.sensor.StepSensorManager
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.BoundaryAction
-import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.FLUSH_CONFIRM_TIMEOUT_MS
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.FLUSH_THRESHOLD_MS
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.computeStepsForBoundarySave
-import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.confirmFreshSensorEvent
+import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.confirmFreshSensorReadingWithFallback
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.isBackfillReferencePlausible
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.isDeviceRebootDetected
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.reconcileBoundarySaveWithDisplay
@@ -68,8 +67,16 @@ class HourBoundaryCloser(
         mutex.withLock { checkMissedHourBoundariesLocked() }
     }
 
-    /** Body of [checkMissedHourBoundaries]; the caller must already hold [mutex]. */
-    suspend fun checkMissedHourBoundariesLocked() {
+    /**
+     * Body of [checkMissedHourBoundaries]; the caller must already hold [mutex].
+     *
+     * [onFreshConfirmAttempted] fires exactly once, right before the backfill branch attempts a
+     * flush/re-register cycle -- used by [handleHourBoundaryLocked]'s own gapHours>1 nested call
+     * to this function (issue #36 review) so it can skip its own redundant attempt against a
+     * sensor this call just tried and failed to freshen, rather than paying the up-to-5s cost
+     * twice under the same mutex hold.
+     */
+    suspend fun checkMissedHourBoundariesLocked(onFreshConfirmAttempted: () -> Unit = {}) {
         val wakeLockToken = acquireWakeLock("missed-boundary check")
         try {
             // Calculate current hour timestamp (what we're about to process)
@@ -151,17 +158,16 @@ class HourBoundaryCloser(
             // Flush sensor FIFO before reading device total for backfill
             val sensorAgeForBackfill = System.currentTimeMillis() - sensorManager.getLastSensorEventTime()
             if (sensorAgeForBackfill > FLUSH_THRESHOLD_MS) {
+                onFreshConfirmAttempted()
                 android.util.Log.w(
                     logTag,
                     "checkMissedHourBoundaries: Sensor data stale (${sensorAgeForBackfill / 1000}s old). Flushing FIFO..."
                 )
-                val backfillFlushProbeStart = System.currentTimeMillis()
-                sensorManager.flushSensor()
-                confirmFreshSensorEvent(
+                confirmFreshSensorReadingWithFallback(
                     sensorState = sensorManager.sensorState,
-                    probeStart = backfillFlushProbeStart,
-                    timeoutMs = FLUSH_CONFIRM_TIMEOUT_MS,
-                    label = "checkMissedHourBoundaries flush",
+                    doFlush = { sensorManager.flushSensor() },
+                    doReRegister = { sensorManager.reRegisterListener() },
+                    label = "checkMissedHourBoundaries",
                     logTag = logTag
                 )
             }
@@ -418,13 +424,14 @@ class HourBoundaryCloser(
                 0
             }
 
+            var freshnessAlreadyAttempted = false
             if (gapHours > 1) {
                 android.util.Log.w(
                     logTag,
                     "handleHourBoundary: Detected stale previousHourTimestamp=${java.util.Date(previousHourTimestamp)} " +
                             "(gap=$gapHours hours). Running missed-hour backfill before saving."
                 )
-                checkMissedHourBoundariesLocked()
+                checkMissedHourBoundariesLocked(onFreshConfirmAttempted = { freshnessAlreadyAttempted = true })
                 previousHourTimestamp = preferences.currentHourTimestamp.first()
                 if (previousHourTimestamp < expectedPreviousHour || previousHourTimestamp > currentHourTimestamp) {
                     android.util.Log.w(
@@ -453,23 +460,32 @@ class HourBoundaryCloser(
             // During Doze, events may be batched in the hardware FIFO.
             val sensorAgeAtBoundary = System.currentTimeMillis() - sensorManager.getLastSensorEventTime()
             if (sensorAgeAtBoundary > FLUSH_THRESHOLD_MS) {
-                android.util.Log.w(
-                    logTag,
-                    "handleHourBoundary: Sensor data stale (${sensorAgeAtBoundary / 1000}s old). Flushing FIFO..."
-                )
-                val boundaryFlushProbeStart = System.currentTimeMillis()
-                sensorManager.flushSensor()
-                confirmFreshSensorEvent(
-                    sensorState = sensorManager.sensorState,
-                    probeStart = boundaryFlushProbeStart,
-                    timeoutMs = FLUSH_CONFIRM_TIMEOUT_MS,
-                    label = "handleHourBoundary flush",
-                    logTag = logTag
-                )
-                val postFlushAge = System.currentTimeMillis() - sensorManager.getLastSensorEventTime()
+                if (freshnessAlreadyAttempted) {
+                    // The nested checkMissedHourBoundariesLocked() call above already ran a full
+                    // flush/re-register cycle against this same still-stale sensor a moment ago
+                    // (issue #36 review) -- retrying identically here would just pay up to
+                    // another 5s under this mutex for a mechanism that just failed.
+                    android.util.Log.d(
+                        logTag,
+                        "handleHourBoundary: Skipping redundant flush/re-register; backfill already attempted this call"
+                    )
+                } else {
+                    android.util.Log.w(
+                        logTag,
+                        "handleHourBoundary: Sensor data stale (${sensorAgeAtBoundary / 1000}s old). Flushing FIFO..."
+                    )
+                    confirmFreshSensorReadingWithFallback(
+                        sensorState = sensorManager.sensorState,
+                        doFlush = { sensorManager.flushSensor() },
+                        doReRegister = { sensorManager.reRegisterListener() },
+                        label = "handleHourBoundary",
+                        logTag = logTag
+                    )
+                }
+                val postAttemptAge = System.currentTimeMillis() - sensorManager.getLastSensorEventTime()
                 android.util.Log.d(
                     logTag,
-                    "handleHourBoundary: Post-flush sensor age=${postFlushAge / 1000}s"
+                    "handleHourBoundary: Post-attempt sensor age=${postAttemptAge / 1000}s"
                 )
             }
 
