@@ -36,6 +36,8 @@ import com.example.myhourlystepcounterv2.StepTrackerConfig
 import com.example.myhourlystepcounterv2.PermissionHelper
 import com.example.myhourlystepcounterv2.getCurrentBootCount
 import com.example.myhourlystepcounterv2.resolveKnownTotalForInitialization
+import com.example.myhourlystepcounterv2.wallClockHourTimestamp
+import com.example.myhourlystepcounterv2.wallClockStartOfDay
 
 class StepCounterForegroundService : android.app.Service() {
     companion object {
@@ -687,19 +689,8 @@ class StepCounterForegroundService : android.app.Service() {
                 // saved currentHourTimestamp is stale (e.g. hour boundary not yet processed).
                 // A stale saved timestamp would fail to exclude the checkpoint row for
                 // the current hour, double-counting those steps.
-                val now = java.util.Calendar.getInstance()
-                val startOfDay = now.clone().let { it as java.util.Calendar
-                    it.set(java.util.Calendar.HOUR_OF_DAY, 0)
-                    it.set(java.util.Calendar.MINUTE, 0)
-                    it.set(java.util.Calendar.SECOND, 0)
-                    it.set(java.util.Calendar.MILLISECOND, 0)
-                    it.timeInMillis
-                }
-                val wallClockHourTimestamp = now.apply {
-                    set(java.util.Calendar.MINUTE, 0)
-                    set(java.util.Calendar.SECOND, 0)
-                    set(java.util.Calendar.MILLISECOND, 0)
-                }.timeInMillis
+                val startOfDay = wallClockStartOfDay()
+                val wallClockHourTimestamp = wallClockHourTimestamp()
 
                 if (inputs.savedHourTimestamp > 0 && wallClockHourTimestamp != inputs.savedHourTimestamp) {
                     android.util.Log.w("StepCounterFGSvc",
@@ -1014,19 +1005,8 @@ class StepCounterForegroundService : android.app.Service() {
             val currentHourSteps = sensorManager.currentStepCount.first()
 
             // Use wall-clock hour for DB exclusion (same rationale as notification combine flow)
-            val now = java.util.Calendar.getInstance()
-            val startOfDay = now.clone().let { it as java.util.Calendar
-                it.set(java.util.Calendar.HOUR_OF_DAY, 0)
-                it.set(java.util.Calendar.MINUTE, 0)
-                it.set(java.util.Calendar.SECOND, 0)
-                it.set(java.util.Calendar.MILLISECOND, 0)
-                it.timeInMillis
-            }
-            val wallClockHourTimestamp = now.apply {
-                set(java.util.Calendar.MINUTE, 0)
-                set(java.util.Calendar.SECOND, 0)
-                set(java.util.Calendar.MILLISECOND, 0)
-            }.timeInMillis
+            val startOfDay = wallClockStartOfDay()
+            val wallClockHourTimestamp = wallClockHourTimestamp()
 
             // Get daily total from database (excluding current hour by wall-clock)
             val checkpointSteps = repository.getStepForHour(wallClockHourTimestamp)?.stepCount ?: 0
