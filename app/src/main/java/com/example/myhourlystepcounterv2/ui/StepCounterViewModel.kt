@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.myhourlystepcounterv2.BuildConfig
 import com.example.myhourlystepcounterv2.PermissionHelper
+import com.example.myhourlystepcounterv2.clearStalePreRebootOffset
 import com.example.myhourlystepcounterv2.StepTrackerConfig
 import com.example.myhourlystepcounterv2.data.StepDatabase
 import com.example.myhourlystepcounterv2.data.StepEntity
@@ -13,6 +14,7 @@ import com.example.myhourlystepcounterv2.data.StepPreferences
 import com.example.myhourlystepcounterv2.data.StepRepository
 import com.example.myhourlystepcounterv2.getCurrentBootCount
 import com.example.myhourlystepcounterv2.resolveKnownTotalForInitialization
+import com.example.myhourlystepcounterv2.restorePersistedPreRebootOffset
 import com.example.myhourlystepcounterv2.sensor.StepSensorManager
 import com.example.myhourlystepcounterv2.wallClockHourTimestamp
 import com.example.myhourlystepcounterv2.wallClockStartOfDay
@@ -242,6 +244,18 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                                 val baseline = if (baselineCandidate > 0) baselineCandidate else actualDeviceSteps
                                 val savedTotal = preferences.totalStepsDevice.first()
                                 val hasFreshSensorEvent = sensorManager.getLastSensorEventTime() > 0L
+
+                                // Restore any persisted pre-reboot offset (issue #30, mirrors
+                                // the service's equivalent same-hour branch): this is the
+                                // *same*-hour path, so the offset still legitimately belongs to
+                                // the hour being seeded here — it hasn't been saved to DB yet.
+                                // Restoring before markInitialized() below lets the offset fold
+                                // into the sensor's currentHourSteps computation from the start.
+                                val persistedOffset = restorePersistedPreRebootOffset(
+                                    preferences = preferences,
+                                    sensorManager = sensorManager
+                                )
+
                                 val knownTotal = resolveKnownTotalForInitialization(
                                     savedTotal = savedTotal,
                                     baseline = baseline,
@@ -255,7 +269,8 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                                 preferences.saveCurrentHourTimestamp(currentHourTimestamp)
                                 android.util.Log.i(
                                     "StepCounter",
-                                    "FG service had fresh prefs - seeded sensor from saved baseline=$baseline, total=$knownTotal"
+                                    "FG service had fresh prefs - seeded sensor from saved baseline=$baseline, " +
+                                            "total=$knownTotal, offset=$persistedOffset"
                                 )
                             }
 
@@ -287,15 +302,11 @@ class StepCounterViewModel(private val repository: StepRepository) : ViewModel()
                                     // to is over, so a stale offset must not ride into the fresh
                                     // hour being seeded here (would inflate its total with steps
                                     // that belong to the previous hour).
-                                    val staleOffset = preferences.currentHourPreRebootOffset.first()
-                                    if (staleOffset > 0) {
-                                        preferences.saveCurrentHourPreRebootOffset(0)
-                                        sensorManager.setPreRebootOffset(0)
-                                        android.util.Log.i(
-                                            "StepCounter",
-                                            "Cleared stale preRebootOffset=$staleOffset (hour changed)"
-                                        )
-                                    }
+                                    clearStalePreRebootOffset(
+                                        preferences = preferences,
+                                        sensorManager = sensorManager,
+                                        logTag = "StepCounter"
+                                    )
 
                                     preferences.saveHourData(
                                         hourStartStepCount = actualDeviceSteps,

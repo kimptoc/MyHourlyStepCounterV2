@@ -34,8 +34,10 @@ import com.example.myhourlystepcounterv2.R
 import com.example.myhourlystepcounterv2.data.StepPreferences
 import com.example.myhourlystepcounterv2.StepTrackerConfig
 import com.example.myhourlystepcounterv2.PermissionHelper
+import com.example.myhourlystepcounterv2.clearStalePreRebootOffset
 import com.example.myhourlystepcounterv2.getCurrentBootCount
 import com.example.myhourlystepcounterv2.resolveKnownTotalForInitialization
+import com.example.myhourlystepcounterv2.restorePersistedPreRebootOffset
 import com.example.myhourlystepcounterv2.wallClockHourTimestamp
 import com.example.myhourlystepcounterv2.wallClockStartOfDay
 
@@ -1094,14 +1096,10 @@ class StepCounterForegroundService : android.app.Service() {
 
             // Restore any persisted pre-reboot offset (e.g., service was killed mid-hour
             // after a previous reboot, and the offset is still pending).
-            val persistedOffset = preferences.currentHourPreRebootOffset.first()
-            if (persistedOffset > 0) {
-                sensorManager.setPreRebootOffset(persistedOffset)
-                android.util.Log.i(
-                    "StepCounterFGSvc",
-                    "initializeSensorFromPreferences: Restored persisted preRebootOffset=$persistedOffset for current hour"
-                )
-            }
+            val persistedOffset = restorePersistedPreRebootOffset(
+                preferences = preferences,
+                sensorManager = sensorManager
+            )
 
             val baseline = if (baselineCandidate > 0) baselineCandidate else maxOf(savedTotal, currentDeviceSteps)
             val knownTotal = resolveKnownTotalForInitialization(
@@ -1118,7 +1116,8 @@ class StepCounterForegroundService : android.app.Service() {
             android.util.Log.i(
                 "StepCounterFGSvc",
                 "initializeSensorFromPreferences: Seeded from saved prefs (same hour). " +
-                        "baseline=$baseline, knownTotal=$knownTotal, savedHour=${java.util.Date(savedHourTimestamp)}"
+                        "baseline=$baseline, knownTotal=$knownTotal, offset=$persistedOffset, " +
+                        "savedHour=${java.util.Date(savedHourTimestamp)}"
             )
         } else {
             // Different hour, no reboot. This cold start (an OS-restarted service) usually
@@ -1153,15 +1152,11 @@ class StepCounterForegroundService : android.app.Service() {
                         "(still ${java.util.Date(hourTimestampAfterClose)}). Falling back to seed-only."
             )
 
-            val staleOffset = preferences.currentHourPreRebootOffset.first()
-            if (staleOffset > 0) {
-                preferences.saveCurrentHourPreRebootOffset(0)
-                sensorManager.setPreRebootOffset(0)
-                android.util.Log.i(
-                    "StepCounterFGSvc",
-                    "initializeSensorFromPreferences: Cleared stale preRebootOffset=$staleOffset (hour changed)"
-                )
-            }
+            clearStalePreRebootOffset(
+                preferences = preferences,
+                sensorManager = sensorManager,
+                logTag = "StepCounterFGSvc"
+            )
 
             var currentDeviceSteps = sensorManager.getCurrentTotalSteps()
 
