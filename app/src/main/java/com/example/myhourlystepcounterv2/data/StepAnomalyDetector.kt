@@ -133,4 +133,31 @@ object StepAnomalyDetector {
             )
         }
     }
+
+    /**
+     * How many of [storedHours]'s completed hours the ledger can actually verify (issue #28
+     * step 3) -- bracketed by a snapshot on both sides with a gap no wider than
+     * [maxTrustedGapMs]. Reports coverage rather than verdicts, so "no anomalies recorded" can
+     * be read alongside "N of M hours checked" instead of over-reassuring on its own; an hour
+     * outside [judgeable] was never judged either way, not judged and cleared.
+     *
+     * Same completed-hour rule as [sweepCompletedHours]: skips the hour containing [now], since
+     * its row is a partial checkpoint the ledger cannot yet bracket by definition.
+     */
+    data class CoverageResult(val judgeable: Int, val total: Int)
+
+    fun countCoverage(
+        storedHours: List<StepEntity>,
+        snapshots: List<DeviceTotalSnapshot>,
+        now: Long,
+        maxTrustedGapMs: Long = MAX_TRUSTED_GAP_MS
+    ): CoverageResult {
+        val currentHourStart = now - (now % ONE_HOUR_MS)
+        val completed = storedHours.filter { it.timestamp < currentHourStart }
+        val judgeable = completed.count { row ->
+            val bound = corroboratedBound(row.timestamp, snapshots)
+            bound != null && bound.maxSnapshotGapMs <= maxTrustedGapMs
+        }
+        return CoverageResult(judgeable = judgeable, total = completed.size)
+    }
 }

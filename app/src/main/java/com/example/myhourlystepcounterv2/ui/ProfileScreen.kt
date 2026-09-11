@@ -46,11 +46,31 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
     val scrollState = rememberScrollState()
     val context = androidx.compose.ui.platform.LocalContext.current
     val preferences = remember { com.example.myhourlystepcounterv2.data.StepPreferences(context.applicationContext) }
-    val anomalyDao = remember {
-        com.example.myhourlystepcounterv2.data.StepDatabase
-            .getDatabase(context.applicationContext).stepAnomalyDao()
-    }
+    val database = remember { com.example.myhourlystepcounterv2.data.StepDatabase.getDatabase(context.applicationContext) }
+    val anomalyDao = remember { database.stepAnomalyDao() }
     val recentAnomalies by anomalyDao.getRecentAnomalies(5).collectAsState(initial = emptyList())
+    // Read-only repository: coverage is a display stat, not part of the write path that
+    // records anomalies, so this instance never calls saveHourlySteps/sweepForAnomalies.
+    // anomalyDao is deliberately omitted here: passing it would make StepRepository.init log
+    // ARMED on every Profile visit, which is reserved for instances that actually write and
+    // check hours (see its own comment) -- this one never calls saveHourlySteps/
+    // sweepForAnomalies, so it should take the "not wired" DEBUG branch instead.
+    val anomalyRepository = remember {
+        com.example.myhourlystepcounterv2.data.StepRepository(
+            stepDao = database.stepDao(),
+            snapshotProvider = { preferences.getDeviceTotalSnapshots() }
+        )
+    }
+    // Coverage isn't a Room Flow like recentAnomalies -- it's a derived stat over hourly rows
+    // and the snapshot ledger, both of which change far more often than an anomaly is
+    // recorded, so it needs its own periodic refresh rather than piggybacking on that Flow.
+    var coverage by remember { mutableStateOf<com.example.myhourlystepcounterv2.data.StepAnomalyDetector.CoverageResult?>(null) }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) {
+            coverage = anomalyRepository.getAnomalyCoverage()
+            kotlinx.coroutines.delay(60_000L)
+        }
+    }
     val coroutineScope = rememberCoroutineScope()
     val powerManager = remember { context.getSystemService(Context.POWER_SERVICE) as PowerManager }
 
@@ -406,10 +426,24 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
                 style = MaterialTheme.typography.titleMedium
             )
 
+            // "N of M hours verified" (issue #28 step 3): a wide sensor-log gap makes an hour
+            // unjudgeable either way, so "no anomalies recorded" alone can over-reassure.
+            // Omitted while total == 0 (no completed hours in the window yet) -- a fresh "0 of
+            // 0" reads as broken rather than as "nothing to show yet".
+            coverage?.let { cov ->
+                if (cov.total > 0) {
+                    Text(
+                        text = "${cov.judgeable} of ${cov.total} recorded hours (last 24h) verified against the sensor log.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
+
             if (recentAnomalies.isEmpty()) {
                 Text(
-                    text = "No anomalies recorded. Hours are checked once the sensor log covers them; " +
-                            "hours it cannot cover are left unjudged rather than assumed correct.",
+                    text = "No anomalies recorded.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp)

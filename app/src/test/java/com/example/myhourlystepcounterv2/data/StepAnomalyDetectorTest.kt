@@ -282,4 +282,90 @@ class StepAnomalyDetectorTest {
 
         assertEquals("unknown", found.single().sourcePath)
     }
+
+    // --- Coverage counting -----------------------------------------------------------
+    // "N of M hours verified" (issue #28 step 3): countCoverage reports how many completed
+    // hours the ledger can actually bracket within the density guard, as a coverage stat
+    // rather than a verdict. Hour offsets 20-23 are arbitrary, chosen only to avoid
+    // colliding with savedThatDay's 0-12 range used by the sweep tests above.
+    //
+    // A single full-hour bracket (just the two edge snapshots) always has a gap of
+    // ONE_HOUR_MS, which already exceeds MAX_TRUSTED_GAP_MS (20 min < 60 min) -- so a
+    // "judgeable" fixture needs interior snapshots splitting the hour into sub-threshold
+    // pieces, matching how the real checkpoint loop's ~5-minute cadence earns coverage.
+
+    @Test
+    fun countCoverage_countsOnlyCompletedHours_excludingTheOneInProgress() {
+        val stored = listOf(
+            StepEntity(timestamp = hourStart(20), stepCount = 100, createdAt = 0L),
+            StepEntity(timestamp = hourStart(21), stepCount = 100, createdAt = 0L)
+        )
+        // Hour 20 is densely bracketed (judgeable); hour 21 would be too, but it is still
+        // in progress at `now` and must be excluded from both total and judgeable.
+        val snapshots = listOf(
+            DeviceTotalSnapshot(hourStart(20), 0),
+            DeviceTotalSnapshot(hourStart(20) + 1_200_000L, 0),
+            DeviceTotalSnapshot(hourStart(20) + 2_400_000L, 0),
+            DeviceTotalSnapshot(hourStart(21), 0),
+            DeviceTotalSnapshot(hourStart(21) + 1_200_000L, 0),
+            DeviceTotalSnapshot(hourStart(21) + 2_400_000L, 0),
+            DeviceTotalSnapshot(hourStart(22), 0)
+        )
+
+        val result = StepAnomalyDetector.countCoverage(stored, snapshots, now = hourStart(21) + 1_800_000L)
+
+        assertEquals(1, result.total)
+        assertEquals(1, result.judgeable)
+    }
+
+    @Test
+    fun countCoverage_excludesAnHourTheLedgerCannotBracketAtAll() {
+        val stored = listOf(StepEntity(timestamp = hourStart(20), stepCount = 100, createdAt = 0L))
+        val snapshots = listOf(DeviceTotalSnapshot(hourStart(20) - 60_000L, 0)) // before only, no "after"
+
+        val result = StepAnomalyDetector.countCoverage(stored, snapshots, now = hourStart(21))
+
+        assertEquals(1, result.total)
+        assertEquals(0, result.judgeable)
+    }
+
+    @Test
+    fun countCoverage_excludesABracketedHourWhoseGapExceedsTheThreshold() {
+        val stored = listOf(StepEntity(timestamp = hourStart(20), stepCount = 100, createdAt = 0L))
+        // Bracketed by only the two hour-edge snapshots -- a full hour apart, over threshold.
+        val snapshots = listOf(
+            DeviceTotalSnapshot(hourStart(20) - 60_000L, 0),
+            DeviceTotalSnapshot(hourStart(21) + 60_000L, 0)
+        )
+
+        val result = StepAnomalyDetector.countCoverage(stored, snapshots, now = hourStart(21))
+
+        assertEquals(1, result.total)
+        assertEquals(0, result.judgeable)
+    }
+
+    @Test
+    fun countCoverage_includesAnHourWithAMaxGapExactlyAtTheThreshold() {
+        val stored = listOf(StepEntity(timestamp = hourStart(20), stepCount = 100, createdAt = 0L))
+        // Three equal 20-minute gaps span the hour exactly -- the density guard's own '<='.
+        val snapshots = listOf(
+            DeviceTotalSnapshot(hourStart(20), 0),
+            DeviceTotalSnapshot(hourStart(20) + StepAnomalyDetector.MAX_TRUSTED_GAP_MS, 0),
+            DeviceTotalSnapshot(hourStart(20) + 2 * StepAnomalyDetector.MAX_TRUSTED_GAP_MS, 0),
+            DeviceTotalSnapshot(hourStart(21), 0)
+        )
+
+        val result = StepAnomalyDetector.countCoverage(stored, snapshots, now = hourStart(21))
+
+        assertEquals(1, result.total)
+        assertEquals(1, result.judgeable)
+    }
+
+    @Test
+    fun countCoverage_isZeroOfZero_whenNoHoursStored() {
+        val result = StepAnomalyDetector.countCoverage(emptyList(), realLedger(), now = hourStart(5))
+
+        assertEquals(0, result.total)
+        assertEquals(0, result.judgeable)
+    }
 }

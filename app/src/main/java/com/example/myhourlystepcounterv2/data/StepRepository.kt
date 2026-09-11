@@ -102,6 +102,26 @@ class StepRepository(
 
     fun getRecentAnomalies(limit: Int): Flow<List<StepAnomalyEntity>>? = anomalyDao?.getRecentAnomalies(limit)
 
+    /**
+     * Coverage for the Profile screen's "N of M hours verified" display (issue #28 step 3).
+     * `total` is completed hours with a stored row in the window, not every hour the window
+     * spans -- an hour with no row at all (never written, or pruned) isn't counted either way,
+     * so this answers "of what we have, how much is verified", not "of what elapsed".
+     * Null when this repository has no snapshot ledger wired up (read-only instances) rather
+     * than a misleading 0-of-0, so the UI can tell "not wired" apart from "wired, nothing yet".
+     */
+    suspend fun getAnomalyCoverage(now: Long = System.currentTimeMillis()): StepAnomalyDetector.CoverageResult? {
+        val provider = snapshotProvider ?: return null
+        return try {
+            val windowStart = now - SWEEP_WINDOW_MS
+            val stored = stepDao.getStepsInRange(windowStart, now)
+            StepAnomalyDetector.countCoverage(stored, provider(), now)
+        } catch (e: Exception) {
+            android.util.Log.w("StepAnomaly", "Coverage computation failed", e)
+            null
+        }
+    }
+
     suspend fun getStepForHour(timestamp: Long): StepEntity? {
         return stepDao.getStepForHour(timestamp)
     }
