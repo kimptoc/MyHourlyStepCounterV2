@@ -1,12 +1,51 @@
 package com.example.myhourlystepcounterv2.data
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.util.Calendar
 
+/**
+ * Robolectric is needed for getAnomalyCoverage's test: StepRepository's constructor logs via
+ * android.util.Log, same reason ConfirmFreshSensorEventTest needs it.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33])
 class StepRepositoryTest {
+
+    /**
+     * Every method throws: proves getAnomalyCoverage's early "no snapshot ledger wired" return
+     * never touches the DAO, rather than just asserting the return value happens to be null.
+     */
+    private val poisonStepDao = object : StepDao {
+        override suspend fun insertStep(step: StepEntity): Unit = throw AssertionError("should not be called")
+        override suspend fun getStepForHour(timestamp: Long): StepEntity? = throw AssertionError("should not be called")
+        override fun getStepCountForHour(timestamp: Long): Flow<Int?> = throw AssertionError("should not be called")
+        override fun getStepsForDay(startOfDay: Long, currentHourTimestamp: Long): Flow<List<StepEntity>> =
+            throw AssertionError("should not be called")
+        override suspend fun getStepsInRange(start: Long, end: Long): List<StepEntity> =
+            throw AssertionError("should not be called")
+        override suspend fun deleteOldSteps(cutoffTime: Long): Unit = throw AssertionError("should not be called")
+        override fun getTotalStepsForDay(startOfDay: Long): Flow<Int?> = throw AssertionError("should not be called")
+        override fun getTotalStepsForDayExcludingCurrentHour(startOfDay: Long, currentHourTimestamp: Long): Flow<Int?> =
+            throw AssertionError("should not be called")
+    }
+
+    @Test
+    fun getAnomalyCoverage_returnsNull_whenNoSnapshotProviderIsWired() = runBlocking {
+        val repository = StepRepository(stepDao = poisonStepDao)
+
+        val result = repository.getAnomalyCoverage()
+
+        assertNull("Read-only instances have no ledger to bracket against", result)
+    }
 
     @Test
     fun testSaveHourlySteps_PreventNegativeSteps() {

@@ -91,9 +91,19 @@ object StepAnomalyDetector {
         toleranceSteps: Int = TOLERANCE_STEPS,
         maxTrustedGapMs: Long = MAX_TRUSTED_GAP_MS
     ): Boolean {
-        if (bound.maxSnapshotGapMs > maxTrustedGapMs) return false
+        if (!isWithinTrustedGap(bound, maxTrustedGapMs)) return false
         return savedSteps > bound.delta + toleranceSteps
     }
+
+    /**
+     * Shared by [isAnomalous] (refuses to judge) and [countCoverage] (counts as judgeable) so
+     * the density guard's own boundary -- a gap exactly at [maxTrustedGapMs] still counts as
+     * dense enough to trust -- lives in exactly one place. These two callers ask the same
+     * question from opposite directions; a hand-duplicated comparison in each would drift the
+     * moment either one's semantics changed without the other noticing.
+     */
+    private fun isWithinTrustedGap(bound: CorroboratedBound, maxTrustedGapMs: Long): Boolean =
+        bound.maxSnapshotGapMs <= maxTrustedGapMs
 
     /**
      * Evaluate stored hours that the ledger can now judge.
@@ -132,5 +142,32 @@ object StepAnomalyDetector {
                 detectedAt = detectedAt
             )
         }
+    }
+
+    /**
+     * How many of [storedHours]'s completed hours the ledger can actually verify (issue #28
+     * step 3) -- bracketed by a snapshot on both sides with a gap no wider than
+     * [maxTrustedGapMs]. Reports coverage rather than verdicts, so "no anomalies recorded" can
+     * be read alongside "N of M hours checked" instead of over-reassuring on its own; an hour
+     * outside [judgeable] was never judged either way, not judged and cleared.
+     *
+     * Same completed-hour rule as [sweepCompletedHours]: skips the hour containing [now], since
+     * its row is a partial checkpoint the ledger cannot yet bracket by definition.
+     */
+    data class CoverageResult(val judgeable: Int, val total: Int)
+
+    fun countCoverage(
+        storedHours: List<StepEntity>,
+        snapshots: List<DeviceTotalSnapshot>,
+        now: Long,
+        maxTrustedGapMs: Long = MAX_TRUSTED_GAP_MS
+    ): CoverageResult {
+        val currentHourStart = now - (now % ONE_HOUR_MS)
+        val completed = storedHours.filter { it.timestamp < currentHourStart }
+        val judgeable = completed.count { row ->
+            val bound = corroboratedBound(row.timestamp, snapshots)
+            bound != null && isWithinTrustedGap(bound, maxTrustedGapMs)
+        }
+        return CoverageResult(judgeable = judgeable, total = completed.size)
     }
 }
