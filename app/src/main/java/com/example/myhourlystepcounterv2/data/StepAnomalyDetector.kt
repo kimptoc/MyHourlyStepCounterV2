@@ -91,9 +91,19 @@ object StepAnomalyDetector {
         toleranceSteps: Int = TOLERANCE_STEPS,
         maxTrustedGapMs: Long = MAX_TRUSTED_GAP_MS
     ): Boolean {
-        if (bound.maxSnapshotGapMs > maxTrustedGapMs) return false
+        if (!isWithinTrustedGap(bound, maxTrustedGapMs)) return false
         return savedSteps > bound.delta + toleranceSteps
     }
+
+    /**
+     * Shared by [isAnomalous] (refuses to judge) and [countCoverage] (counts as judgeable) so
+     * the density guard's own boundary -- a gap exactly at [maxTrustedGapMs] still counts as
+     * dense enough to trust -- lives in exactly one place. These two callers ask the same
+     * question from opposite directions; a hand-duplicated comparison in each would drift the
+     * moment either one's semantics changed without the other noticing.
+     */
+    private fun isWithinTrustedGap(bound: CorroboratedBound, maxTrustedGapMs: Long): Boolean =
+        bound.maxSnapshotGapMs <= maxTrustedGapMs
 
     /**
      * Evaluate stored hours that the ledger can now judge.
@@ -156,7 +166,7 @@ object StepAnomalyDetector {
         val completed = storedHours.filter { it.timestamp < currentHourStart }
         val judgeable = completed.count { row ->
             val bound = corroboratedBound(row.timestamp, snapshots)
-            bound != null && bound.maxSnapshotGapMs <= maxTrustedGapMs
+            bound != null && isWithinTrustedGap(bound, maxTrustedGapMs)
         }
         return CoverageResult(judgeable = judgeable, total = completed.size)
     }

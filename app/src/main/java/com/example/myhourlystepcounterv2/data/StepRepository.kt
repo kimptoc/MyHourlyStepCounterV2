@@ -116,6 +116,8 @@ class StepRepository(
             val windowStart = now - SWEEP_WINDOW_MS
             val stored = stepDao.getStepsInRange(windowStart, now)
             StepAnomalyDetector.countCoverage(stored, provider(), now)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             android.util.Log.w("StepAnomaly", "Coverage computation failed", e)
             null
