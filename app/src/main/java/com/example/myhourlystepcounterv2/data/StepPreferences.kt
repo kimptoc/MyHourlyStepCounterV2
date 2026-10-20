@@ -47,7 +47,7 @@ class StepPreferences(private val context: Context) {
         // anomaly later can still name the writer. Logcat is long gone by then.
         val HOUR_SOURCE_PATHS = stringPreferencesKey("hour_source_paths_json")
 
-        // Second reminder (XX:55) preferences
+        // Second reminder preferences
         val LAST_SECOND_REMINDER_TIME = longPreferencesKey("last_second_reminder_time")
         val SECOND_REMINDER_SENT_THIS_HOUR = booleanPreferencesKey("second_reminder_sent_this_hour")
         val LAST_KNOWN_BOOT_COUNT = intPreferencesKey("last_known_boot_count")
@@ -61,11 +61,22 @@ class StepPreferences(private val context: Context) {
         // User-configurable hourly step goal (used for reminders, progress ring, and history markers)
         val HOURLY_STEP_GOAL = intPreferencesKey("hourly_step_goal")
 
+        // User-configurable reminder offsets: minutes before the end of the hour
+        val FIRST_REMINDER_MINUTES_BEFORE = intPreferencesKey("first_reminder_minutes_before")
+        val SECOND_REMINDER_MINUTES_BEFORE = intPreferencesKey("second_reminder_minutes_before")
+
         // Defaults (user requested defaults ON)
         const val PERMANENT_NOTIFICATION_DEFAULT = true
         const val USE_WAKE_LOCK_DEFAULT = true
         const val REMINDER_NOTIFICATION_DEFAULT = true
         const val HOURLY_STEP_GOAL_DEFAULT = StepTrackerConfig.STEP_REMINDER_THRESHOLD
+        const val FIRST_REMINDER_MINUTES_BEFORE_DEFAULT = StepTrackerConfig.FIRST_REMINDER_MINUTES_BEFORE_DEFAULT
+        const val SECOND_REMINDER_MINUTES_BEFORE_DEFAULT = StepTrackerConfig.SECOND_REMINDER_MINUTES_BEFORE_DEFAULT
+
+        /** True when the pair is a valid reminder schedule: first in 2..59, second in 1 until first. */
+        fun isValidReminderOffsets(firstMinutesBefore: Int, secondMinutesBefore: Int): Boolean =
+            firstMinutesBefore in 2..StepTrackerConfig.REMINDER_MINUTES_BEFORE_MAX &&
+                secondMinutesBefore in 1 until firstMinutesBefore
 
         private const val SNAPSHOT_RETENTION_MS = 24 * 60 * 60 * 1000L
     }
@@ -112,6 +123,21 @@ class StepPreferences(private val context: Context) {
             (preferences[HOURLY_STEP_GOAL] ?: HOURLY_STEP_GOAL_DEFAULT).coerceIn(1, StepTrackerConfig.MAX_STEPS_PER_HOUR)
         }
         .distinctUntilChanged()
+
+    // Read as a pair so an invalid stored combination falls back to the defaults together,
+    // keeping the second reminder strictly closer to the hour than the first.
+    private val reminderOffsets: Flow<Pair<Int, Int>> = context.dataStore.data
+        .map { preferences ->
+            val first = preferences[FIRST_REMINDER_MINUTES_BEFORE] ?: FIRST_REMINDER_MINUTES_BEFORE_DEFAULT
+            val second = preferences[SECOND_REMINDER_MINUTES_BEFORE] ?: SECOND_REMINDER_MINUTES_BEFORE_DEFAULT
+            if (isValidReminderOffsets(first, second)) first to second
+            else FIRST_REMINDER_MINUTES_BEFORE_DEFAULT to SECOND_REMINDER_MINUTES_BEFORE_DEFAULT
+        }
+        .distinctUntilChanged()
+
+    val firstReminderMinutesBefore: Flow<Int> = reminderOffsets.map { it.first }.distinctUntilChanged()
+
+    val secondReminderMinutesBefore: Flow<Int> = reminderOffsets.map { it.second }.distinctUntilChanged()
 
     val lastReminderNotificationTime: Flow<Long> = context.dataStore.data
         .map { preferences -> preferences[LAST_REMINDER_NOTIFICATION_TIME] ?: 0L }
@@ -239,6 +265,18 @@ class StepPreferences(private val context: Context) {
         context.dataStore.updateData { preferences ->
             preferences.toMutablePreferences().apply {
                 this[HOURLY_STEP_GOAL] = goal
+            }
+        }
+    }
+
+    suspend fun saveReminderMinutesBefore(firstMinutesBefore: Int, secondMinutesBefore: Int) {
+        require(isValidReminderOffsets(firstMinutesBefore, secondMinutesBefore)) {
+            "Invalid reminder offsets: first=$firstMinutesBefore, second=$secondMinutesBefore"
+        }
+        context.dataStore.updateData { preferences ->
+            preferences.toMutablePreferences().apply {
+                this[FIRST_REMINDER_MINUTES_BEFORE] = firstMinutesBefore
+                this[SECOND_REMINDER_MINUTES_BEFORE] = secondMinutesBefore
             }
         }
     }

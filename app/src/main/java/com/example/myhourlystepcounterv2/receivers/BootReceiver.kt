@@ -36,15 +36,22 @@ class BootReceiver(
                     // back to inexact if SCHEDULE_EXACT_ALARM is not granted, so this
                     // never crashes boot scheduling.
                     if (reminderEnabled) {
+                        val firstMinutesBefore = prefs.firstReminderMinutesBefore.first()
+                        val secondMinutesBefore = prefs.secondReminderMinutesBefore.first()
                         com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleStepReminders(
                             context.applicationContext,
-                            skipPermissionCheck = true
+                            skipPermissionCheck = true,
+                            minutesBefore = firstMinutesBefore
                         )
                         com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleSecondStepReminder(
                             context.applicationContext,
-                            skipPermissionCheck = true
+                            skipPermissionCheck = true,
+                            minutesBefore = secondMinutesBefore
                         )
-                        android.util.Log.d("BootReceiver", "Step reminders scheduled after restart/update (XX:50 and XX:55)")
+                        android.util.Log.d(
+                            "BootReceiver",
+                            "Step reminders scheduled after restart/update ($firstMinutesBefore and $secondMinutesBefore min before the hour)"
+                        )
                     }
 
                     com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleHourBoundaryAlarms(
