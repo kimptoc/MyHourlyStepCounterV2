@@ -253,4 +253,26 @@ class TraceUnconfirmedSnapshotTest {
 
         assertEquals(0, deferred.await())
     }
+
+    @Test
+    fun returnsNegative_whenCounterWentBackwards() = runTest {
+        // A sensor reset leaves the next total below the snapshot: not "not stale", just
+        // unmeasurable, so the signed gap is returned rather than flattened to 0.
+        val state = MutableStateFlow(SensorState(lastKnownStepCount = 1_000, lastSensorEventTimeMs = 100L))
+
+        val deferred = async {
+            traceUnconfirmedSnapshot(
+                sensorState = state,
+                sinceMs = 200L,
+                snapshotTotal = 1_000,
+                windowMs = 10_000L
+            )
+        }
+
+        advanceTimeBy(500)
+        state.value = SensorState(lastKnownStepCount = 40, lastSensorEventTimeMs = 700L)
+        advanceUntilIdle()
+
+        assertEquals(-960, deferred.await())
+    }
 }

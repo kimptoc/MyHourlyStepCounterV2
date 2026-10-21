@@ -141,8 +141,10 @@ class StepCounterForegroundService : android.app.Service() {
          * the snapshot also count towards the gap, so a large gap paired with a long delay is
          * weaker evidence of staleness than the same gap seconds later.
          *
-         * Returns the number of steps the snapshot was behind the next event (0 when it wasn't
-         * stale), or null when no event arrived within [windowMs].
+         * Returns how many steps the snapshot was behind the next event (0 when it wasn't stale,
+         * negative when the counter went backwards, e.g. a sensor reset, so staleness can't be
+         * measured), or null when no event arrived within [windowMs]. No event is ambiguous: a
+         * stationary phone and a dormant listener (issue #36) look the same from here.
          */
         suspend fun traceUnconfirmedSnapshot(
             sensorState: kotlinx.coroutines.flow.StateFlow<com.example.myhourlystepcounterv2.sensor.SensorState>,
@@ -157,14 +159,21 @@ class StepCounterForegroundService : android.app.Service() {
             if (next == null) {
                 android.util.Log.i(
                     logTag,
-                    "Unconfirmed snapshot trace: no sensor event within ${windowMs / 1000}s; " +
-                            "device likely stationary, snapshot total=$snapshotTotal probably not stale"
+                    "Unconfirmed snapshot trace: no sensor event within ${windowMs / 1000}s; stationary or " +
+                            "dormant listener, staleness of snapshot total=$snapshotTotal unknown — check the next " +
+                            "re-register/flush logs before trusting it"
                 )
                 return null
             }
             val behind = next.lastKnownStepCount - snapshotTotal
             val lateBySec = (next.lastSensorEventTimeMs - sinceMs) / 1000
-            if (behind > 0) {
+            if (behind < 0) {
+                android.util.Log.w(
+                    logTag,
+                    "Unconfirmed snapshot trace: next event ${lateBySec}s later has total=${next.lastKnownStepCount}, " +
+                            "below snapshot total=$snapshotTotal; counter reset, staleness not measurable"
+                )
+            } else if (behind > 0) {
                 android.util.Log.w(
                     logTag,
                     "Unconfirmed snapshot trace: next event ${lateBySec}s later has total=${next.lastKnownStepCount}; " +
@@ -177,7 +186,7 @@ class StepCounterForegroundService : android.app.Service() {
                             "snapshot total=$snapshotTotal was not stale"
                 )
             }
-            return maxOf(0, behind)
+            return behind
         }
 
         /**
@@ -810,20 +819,29 @@ class StepCounterForegroundService : android.app.Service() {
                         )
                         val flushProbeStart = System.currentTimeMillis()
                         val flushAccepted = sensorManager.flushSensor()
-                        // The OS accepting a flush isn't a guarantee a reading lands within the
-                        // timeout below — confirmFreshSensorEvent logs that gap when it happens
-                        // rather than silently proceeding, which is what this branch used to do.
-                        val confirmed = confirmFreshSensorEvent(
-                            sensorState = sensorManager.sensorState,
-                            probeStart = flushProbeStart,
-                            timeoutMs = FLUSH_CONFIRM_TIMEOUT_MS,
-                            label = "flushSensor()"
-                        )
-                        if (!confirmed) {
+                        if (!flushAccepted) {
+                            // A rejected flush means no callback is coming, so neither the confirm
+                            // wait nor a staleness trace (whose gap would only be elapsed-time
+                            // steps) tells us anything.
+                            android.util.Log.w(
+                                "StepCounterFGSvc",
+                                "flushSensor() rejected by the platform; no callback expected, snapshot uses cached total"
+                            )
+                        } else if (
+                            // The OS accepting a flush isn't a guarantee a reading lands within the
+                            // timeout below — confirmFreshSensorEvent logs that gap when it happens
+                            // rather than silently proceeding, which is what this branch used to do.
+                            !confirmFreshSensorEvent(
+                                sensorState = sensorManager.sensorState,
+                                probeStart = flushProbeStart,
+                                timeoutMs = FLUSH_CONFIRM_TIMEOUT_MS,
+                                label = "flushSensor()"
+                            )
+                        ) {
                             unconfirmedFlush = true
                             android.util.Log.d(
                                 "StepCounterFGSvc",
-                                "flushSensor() unconfirmed: flushAccepted=$flushAccepted, sensorAgeBefore=${sensorAge / 1000}s, " +
+                                "flushSensor() unconfirmed: sensorAgeBefore=${sensorAge / 1000}s, " +
                                         "lastKnownTotal=${sensorManager.sensorState.value.lastKnownStepCount}"
                             )
                         }
