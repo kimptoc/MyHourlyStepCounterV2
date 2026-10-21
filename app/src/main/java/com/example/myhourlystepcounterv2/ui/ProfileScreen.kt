@@ -41,6 +41,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.myhourlystepcounterv2.BuildConfig
 import com.example.myhourlystepcounterv2.StepTrackerConfig
+import com.example.myhourlystepcounterv2.notifications.AlarmScheduler
 
 @Composable
 fun ProfileScreen(modifier: Modifier = Modifier) {
@@ -433,8 +434,8 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
             }
 
             Text(
-                text = "Reminders fire at XX:${"%02d".format(60 - firstMinutesBefore)} and " +
-                        "XX:${"%02d".format(60 - secondMinutesBefore)} when you're below your hourly goal (8am-10pm).",
+                text = "Reminders fire at XX:${"%02d".format(AlarmScheduler.reminderMinuteOfHour(firstMinutesBefore))} and " +
+                        "XX:${"%02d".format(AlarmScheduler.reminderMinuteOfHour(secondMinutesBefore))} when you're below your hourly goal (8am-10pm).",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 8.dp, top = 4.dp)
