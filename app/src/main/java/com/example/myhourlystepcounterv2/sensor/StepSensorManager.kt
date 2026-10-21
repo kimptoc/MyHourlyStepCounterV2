@@ -36,7 +36,12 @@ internal fun clampMonotonicHourSteps(previousDisplayed: Int, calculatedStepsThis
 }
 
 class StepSensorManager private constructor(context: Context) : SensorEventListener {
-    private val sensorManager = context.applicationContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+    // Obtained through an attribution context so the platform's ACTIVITY_RECOGNITION app-op
+    // notes carry a tag declared in the manifest, instead of logging an undeclared-tag error
+    // on every sensor delivery.
+    private val sensorManager = context.applicationContext
+        .createAttributionContext(SENSOR_ATTRIBUTION_TAG)
+        .getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val stepSensor = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
     private val appContext = context.applicationContext
     private val preferences = StepPreferences(appContext)
@@ -65,6 +70,9 @@ class StepSensorManager private constructor(context: Context) : SensorEventListe
     }
 
     companion object {
+        /** Must match the `<attribution android:tag>` declared in AndroidManifest.xml. */
+        const val SENSOR_ATTRIBUTION_TAG = "stepCounter"
+
         @Volatile
         private var INSTANCE: StepSensorManager? = null
 
