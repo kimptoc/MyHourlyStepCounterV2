@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -40,6 +41,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.myhourlystepcounterv2.BuildConfig
 import com.example.myhourlystepcounterv2.StepTrackerConfig
+import com.example.myhourlystepcounterv2.notifications.AlarmScheduler
 
 @Composable
 fun ProfileScreen(modifier: Modifier = Modifier) {
@@ -340,6 +342,100 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
 
             Text(
                 text = "Steps needed each hour to hit your goal. Used for reminders, the progress ring, and history markers.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 8.dp, top = 4.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Reminder timing (user-configurable minutes before the end of the hour)
+        Column(
+            horizontalAlignment = Alignment.Start,
+            modifier = Modifier.padding(16.dp)
+        ) {
+            val firstMinutesBefore by preferences.firstReminderMinutesBefore.collectAsState(
+                initial = com.example.myhourlystepcounterv2.data.StepPreferences.FIRST_REMINDER_MINUTES_BEFORE_DEFAULT
+            )
+            val secondMinutesBefore by preferences.secondReminderMinutesBefore.collectAsState(
+                initial = com.example.myhourlystepcounterv2.data.StepPreferences.SECOND_REMINDER_MINUTES_BEFORE_DEFAULT
+            )
+            var firstInput by remember(firstMinutesBefore) { mutableStateOf(firstMinutesBefore.toString()) }
+            var secondInput by remember(secondMinutesBefore) { mutableStateOf(secondMinutesBefore.toString()) }
+            var reminderErrorMessage by remember { mutableStateOf<String?>(null) }
+
+            Text(
+                text = "Reminder Timing",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+
+            OutlinedTextField(
+                value = firstInput,
+                onValueChange = {
+                    firstInput = it
+                    reminderErrorMessage = null
+                },
+                label = { Text("First warning (minutes before hour)") },
+                singleLine = true,
+                isError = reminderErrorMessage != null,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = secondInput,
+                    onValueChange = {
+                        secondInput = it
+                        reminderErrorMessage = null
+                    },
+                    label = { Text("Final alert (minutes before hour)") },
+                    singleLine = true,
+                    isError = reminderErrorMessage != null,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Button(onClick = {
+                    val parsedFirst = firstInput.trim().toIntOrNull()
+                    val parsedSecond = secondInput.trim().toIntOrNull()
+                    if (parsedFirst != null && parsedSecond != null &&
+                        com.example.myhourlystepcounterv2.data.StepPreferences.isValidReminderOffsets(parsedFirst, parsedSecond)
+                    ) {
+                        reminderErrorMessage = null
+                        coroutineScope.launch {
+                            try {
+                                preferences.saveReminderMinutesBefore(parsedFirst, parsedSecond)
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                reminderErrorMessage = "Failed to save reminder timing. Please try again."
+                            }
+                        }
+                    } else {
+                        reminderErrorMessage = "First warning must be 2-${StepTrackerConfig.REMINDER_MINUTES_BEFORE_MAX} minutes, " +
+                                "and the final alert must be at least 1 minute and less than the first warning"
+                    }
+                }) {
+                    Text("Save")
+                }
+            }
+
+            reminderErrorMessage?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(start = 8.dp, top = 4.dp)
+                )
+            }
+
+            Text(
+                text = "Reminders fire at XX:${"%02d".format(AlarmScheduler.reminderMinuteOfHour(firstMinutesBefore))} and " +
+                        "XX:${"%02d".format(AlarmScheduler.reminderMinuteOfHour(secondMinutesBefore))} when you're below your hourly goal (8am-10pm).",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 8.dp, top = 4.dp)

@@ -54,7 +54,12 @@ object NotificationHelper {
         notificationManager.notify(NOTIFICATION_ID, notification)
     }
 
-    fun sendSecondStepReminderNotification(context: Context, currentSteps: Int, goal: Int = StepTrackerConfig.STEP_REMINDER_THRESHOLD) {
+    fun sendSecondStepReminderNotification(
+        context: Context,
+        currentSteps: Int,
+        goal: Int = StepTrackerConfig.STEP_REMINDER_THRESHOLD,
+        minutesBefore: Int = StepTrackerConfig.SECOND_REMINDER_MINUTES_BEFORE_DEFAULT
+    ) {
         createUrgentReminderNotificationChannel(context)
 
         val intent = Intent(context, MainActivity::class.java).apply {
@@ -70,12 +75,13 @@ object NotificationHelper {
 
         val notification = NotificationCompat.Builder(context, URGENT_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(context.getString(R.string.second_reminder_notification_title))
+            .setContentTitle(context.getString(R.string.second_reminder_notification_title, minutesBefore))
             .setContentText(
                 context.getString(
                     R.string.second_reminder_notification_text,
                     currentSteps,
-                    goal
+                    goal,
+                    minutesBefore
                 )
             )
             .setStyle(
@@ -83,7 +89,8 @@ object NotificationHelper {
                     context.getString(
                         R.string.second_reminder_notification_text,
                         currentSteps,
-                        goal
+                        goal,
+                        minutesBefore
                     )
                 )
             )
@@ -96,7 +103,7 @@ object NotificationHelper {
             .build()
 
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        // Use a dedicated ID so :55 posts as a fresh alert (more noticeable on Samsung)
+        // Use a dedicated ID so the second reminder posts as a fresh alert (more noticeable on Samsung)
         notificationManager.notify(URGENT_NOTIFICATION_ID, notification)
     }
 

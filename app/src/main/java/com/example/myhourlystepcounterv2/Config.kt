@@ -25,7 +25,7 @@ object StepTrackerConfig {
 
     /**
      * Minimum step threshold for hourly step reminders.
-     * User will receive a notification at :50 of each hour if below this threshold.
+     * User will receive a notification before the end of each hour if below this threshold.
      * Reminds user to move before the hour ends.
      *
      * Value: 250 steps/hour
@@ -34,10 +34,15 @@ object StepTrackerConfig {
 
     /**
      * Two-stage reminder system:
-     * - First reminder at XX:50 (10 minutes before hour) with standard vibration
-     * - Second reminder at XX:55 (5 minutes before hour) with enhanced vibration
+     * - First reminder N minutes before the hour (default 10, i.e. XX:50) with standard vibration
+     * - Second reminder M minutes before the hour (default 5, i.e. XX:55) with enhanced vibration
      *   (only sent if steps still below threshold)
+     * Both offsets are user-configurable in Profile; these are the defaults. The second
+     * reminder must be closer to the hour than the first.
      */
+    const val FIRST_REMINDER_MINUTES_BEFORE_DEFAULT = 10
+    const val SECOND_REMINDER_MINUTES_BEFORE_DEFAULT = 5
+    const val REMINDER_MINUTES_BEFORE_MAX = 59
 
     /**
      * Vibration pattern for first reminder (XX:50).

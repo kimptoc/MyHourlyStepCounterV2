@@ -272,6 +272,50 @@ class AlarmSchedulerTest {
     }
 
     @Test
+    fun testScheduleStepReminders_withCustomOffset_schedulesAtConfiguredMinute() {
+        // When - first warning configured 20 minutes before the hour
+        AlarmScheduler.scheduleStepReminders(context, skipPermissionCheck = true, minutesBefore = 20)
+
+        // Then
+        val alarm = shadowAlarmManager.scheduledAlarms.first()
+        val scheduled = Calendar.getInstance().apply { timeInMillis = alarm.triggerAtMs }
+        assertEquals(40, scheduled.get(Calendar.MINUTE))
+        assertEquals(0, scheduled.get(Calendar.SECOND))
+        assertTrue(alarm.triggerAtMs > System.currentTimeMillis())
+    }
+
+    @Test
+    fun testScheduleSecondStepReminder_withCustomOffset_schedulesAtConfiguredMinute() {
+        // When - final alert configured 2 minutes before the hour
+        AlarmScheduler.scheduleSecondStepReminder(context, skipPermissionCheck = true, minutesBefore = 2)
+
+        // Then
+        val alarm = shadowAlarmManager.scheduledAlarms.first()
+        val scheduled = Calendar.getInstance().apply { timeInMillis = alarm.triggerAtMs }
+        assertEquals(58, scheduled.get(Calendar.MINUTE))
+        assertTrue(alarm.triggerAtMs > System.currentTimeMillis())
+    }
+
+    @Test
+    fun testScheduleNextWindow_withCustomOffsets_usesConfiguredMinutes() {
+        AlarmScheduler.scheduleStepRemindersNextWindow(context, skipPermissionCheck = true, minutesBefore = 15)
+        AlarmScheduler.scheduleSecondStepReminderNextWindow(context, skipPermissionCheck = true, minutesBefore = 3)
+
+        val minutes = shadowAlarmManager.scheduledAlarms.map {
+            Calendar.getInstance().apply { timeInMillis = it.triggerAtMs }.get(Calendar.MINUTE)
+        }.toSet()
+        assertEquals(setOf(45, 57), minutes)
+    }
+
+    @Test
+    fun testReminderMinuteOfHour() {
+        assertEquals(50, AlarmScheduler.reminderMinuteOfHour(10))
+        assertEquals(55, AlarmScheduler.reminderMinuteOfHour(5))
+        assertEquals(1, AlarmScheduler.reminderMinuteOfHour(59))
+        assertEquals(59, AlarmScheduler.reminderMinuteOfHour(1))
+    }
+
+    @Test
     fun testBoundaryCheckAlarm_usesExactAndAllowWhileIdle() {
         // When
         AlarmScheduler.scheduleBoundaryCheckAlarm(context, skipPermissionCheck = true)
