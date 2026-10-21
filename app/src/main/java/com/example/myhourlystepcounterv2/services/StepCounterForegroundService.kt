@@ -125,6 +125,62 @@ class StepCounterForegroundService : android.app.Service() {
         }
 
         /**
+         * How long [traceUnconfirmedSnapshot] keeps watching for the next sensor event after a
+         * checkpoint flush failed to confirm. Matches the checkpoint interval, so the trace
+         * resolves before the next checkpoint's own flush starts.
+         */
+        val UNCONFIRMED_SNAPSHOT_TRACE_WINDOW_MS = CHECKPOINT_INTERVAL_MINUTES * 60_000L
+
+        /**
+         * Diagnostic follow-up for a checkpoint snapshot taken after a flush that didn't confirm.
+         * A timed-out flush on its own doesn't say whether the snapshot was actually stale: on
+         * this device TYPE_STEP_COUNTER typically delivers nothing when no steps were taken, so a
+         * stationary phone times out with a snapshot that is already correct. Waits for the next
+         * sensor event after [sinceMs] and logs how far the snapshot was behind it, so logcat can
+         * separate "stationary, snapshot fine" from "snapshot missed steps". Steps taken after
+         * the snapshot also count towards the gap, so a large gap paired with a long delay is
+         * weaker evidence of staleness than the same gap seconds later.
+         *
+         * Returns the number of steps the snapshot was behind the next event (0 when it wasn't
+         * stale), or null when no event arrived within [windowMs].
+         */
+        suspend fun traceUnconfirmedSnapshot(
+            sensorState: kotlinx.coroutines.flow.StateFlow<com.example.myhourlystepcounterv2.sensor.SensorState>,
+            sinceMs: Long,
+            snapshotTotal: Int,
+            windowMs: Long = UNCONFIRMED_SNAPSHOT_TRACE_WINDOW_MS,
+            logTag: String = "StepCounterFGSvc"
+        ): Int? {
+            val next = kotlinx.coroutines.withTimeoutOrNull(windowMs) {
+                sensorState.first { it.lastSensorEventTimeMs > sinceMs }
+            }
+            if (next == null) {
+                android.util.Log.i(
+                    logTag,
+                    "Unconfirmed snapshot trace: no sensor event within ${windowMs / 1000}s; " +
+                            "device likely stationary, snapshot total=$snapshotTotal probably not stale"
+                )
+                return null
+            }
+            val behind = next.lastKnownStepCount - snapshotTotal
+            val lateBySec = (next.lastSensorEventTimeMs - sinceMs) / 1000
+            if (behind > 0) {
+                android.util.Log.w(
+                    logTag,
+                    "Unconfirmed snapshot trace: next event ${lateBySec}s later has total=${next.lastKnownStepCount}; " +
+                            "snapshot total=$snapshotTotal was $behind steps behind"
+                )
+            } else {
+                android.util.Log.i(
+                    logTag,
+                    "Unconfirmed snapshot trace: next event ${lateBySec}s later has total=${next.lastKnownStepCount}; " +
+                            "snapshot total=$snapshotTotal was not stale"
+                )
+            }
+            return maxOf(0, behind)
+        }
+
+        /**
          * Tries to get a confirmed fresh sensor reading via flush, falling back to re-registering
          * the listener if the flush doesn't confirm within its budget (issue #36). On-device
          * evidence gathered after #33/#34 shipped found flush alone never confirmed in 8 attempts
@@ -731,6 +787,7 @@ class StepCounterForegroundService : android.app.Service() {
             while (isActive) {
                 val lastEventTime = sensorManager.getLastSensorEventTime()
                 val sensorAge = System.currentTimeMillis() - lastEventTime
+                var unconfirmedFlush = false
                 when (determineSensorAction(sensorAge, DORMANT_THRESHOLD_MS, lastEventTime)) {
                     SensorAction.RE_REGISTER -> {
                         android.util.Log.w(
@@ -752,21 +809,39 @@ class StepCounterForegroundService : android.app.Service() {
                             "Sensor data ${sensorAge / 1000}s old. Flushing FIFO before snapshot."
                         )
                         val flushProbeStart = System.currentTimeMillis()
-                        sensorManager.flushSensor()
+                        val flushAccepted = sensorManager.flushSensor()
                         // The OS accepting a flush isn't a guarantee a reading lands within the
                         // timeout below — confirmFreshSensorEvent logs that gap when it happens
                         // rather than silently proceeding, which is what this branch used to do.
-                        confirmFreshSensorEvent(
+                        val confirmed = confirmFreshSensorEvent(
                             sensorState = sensorManager.sensorState,
                             probeStart = flushProbeStart,
                             timeoutMs = FLUSH_CONFIRM_TIMEOUT_MS,
                             label = "flushSensor()"
                         )
+                        if (!confirmed) {
+                            unconfirmedFlush = true
+                            android.util.Log.d(
+                                "StepCounterFGSvc",
+                                "flushSensor() unconfirmed: flushAccepted=$flushAccepted, sensorAgeBefore=${sensorAge / 1000}s, " +
+                                        "lastKnownTotal=${sensorManager.sensorState.value.lastKnownStepCount}"
+                            )
+                        }
                     }
                     SensorAction.NONE -> { /* sensor is fresh */ }
                 }
 
                 val currentTotal = sensorManager.getCurrentTotalSteps()
+                if (unconfirmedFlush && currentTotal > 0) {
+                    val traceSince = System.currentTimeMillis()
+                    launch {
+                        traceUnconfirmedSnapshot(
+                            sensorState = sensorManager.sensorState,
+                            sinceMs = traceSince,
+                            snapshotTotal = currentTotal
+                        )
+                    }
+                }
                 if (currentTotal > 0) {
                     preferences.saveDeviceTotalSnapshot(System.currentTimeMillis(), currentTotal)
                     saveCurrentHourCheckpoint(currentTotal)

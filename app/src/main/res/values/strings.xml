@@ -1,5 +1,6 @@
 <resources>
     <string name="app_name">StepNudge</string>
+    <string name="attribution_step_counter">Hourly step counting</string>
 
     <!-- Notification strings -->
     <string name="notification_channel_name">Step counter (persistent)</string>

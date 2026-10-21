@@ -3,13 +3,16 @@ package com.example.myhourlystepcounterv2.services
 import com.example.myhourlystepcounterv2.sensor.SensorState
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.confirmFreshSensorEvent
 import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.confirmFreshSensorReadingWithFallback
+import com.example.myhourlystepcounterv2.services.StepCounterForegroundService.Companion.traceUnconfirmedSnapshot
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -184,5 +187,70 @@ class ConfirmFreshSensorReadingWithFallbackTest {
         assertFalse(result)
         assertTrue("Flush should still be attempted even though the sensor has never reported", flushCalled)
         assertFalse("Sensor never reported; re-register should not have been attempted", reRegisterCalled)
+    }
+}
+
+/**
+ * Diagnostic follow-up for an unconfirmed checkpoint flush: a timeout alone can't tell a
+ * stationary phone (snapshot already correct) from a snapshot that missed steps, so the next
+ * sensor event is compared against the snapshot total.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33])
+class TraceUnconfirmedSnapshotTest {
+
+    @Test
+    fun returnsNull_whenNoEventArrivesWithinWindow() = runTest {
+        val state = MutableStateFlow(SensorState(lastKnownStepCount = 1_000, lastSensorEventTimeMs = 100L))
+
+        val result = traceUnconfirmedSnapshot(
+            sensorState = state,
+            sinceMs = 200L,
+            snapshotTotal = 1_000,
+            windowMs = 1_000L
+        )
+
+        assertNull(result)
+    }
+
+    @Test
+    fun returnsStepsBehind_whenNextEventShowsSnapshotWasStale() = runTest {
+        val state = MutableStateFlow(SensorState(lastKnownStepCount = 1_000, lastSensorEventTimeMs = 100L))
+
+        val deferred = async {
+            traceUnconfirmedSnapshot(
+                sensorState = state,
+                sinceMs = 200L,
+                snapshotTotal = 1_000,
+                windowMs = 10_000L
+            )
+        }
+
+        advanceTimeBy(500)
+        state.value = SensorState(lastKnownStepCount = 1_042, lastSensorEventTimeMs = 700L)
+        advanceUntilIdle()
+
+        assertEquals(42, deferred.await())
+    }
+
+    @Test
+    fun returnsZero_whenNextEventMatchesSnapshot() = runTest {
+        val state = MutableStateFlow(SensorState(lastKnownStepCount = 1_000, lastSensorEventTimeMs = 100L))
+
+        val deferred = async {
+            traceUnconfirmedSnapshot(
+                sensorState = state,
+                sinceMs = 200L,
+                snapshotTotal = 1_000,
+                windowMs = 10_000L
+            )
+        }
+
+        advanceTimeBy(500)
+        state.value = SensorState(lastKnownStepCount = 1_000, lastSensorEventTimeMs = 700L)
+        advanceUntilIdle()
+
+        assertEquals(0, deferred.await())
     }
 }
