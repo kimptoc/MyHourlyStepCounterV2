@@ -36,12 +36,22 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.foundation.layout.Row
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.myhourlystepcounterv2.BuildConfig
 import com.example.myhourlystepcounterv2.StepTrackerConfig
 import com.example.myhourlystepcounterv2.notifications.AlarmScheduler
+
+/** Test tags for the reminder timing controls (issue #42). */
+internal object ReminderTestTags {
+    const val FIRST_INPUT = "reminderFirstInput"
+    const val SECOND_INPUT = "reminderSecondInput"
+    const val SAVE = "reminderSave"
+    const val ERROR = "reminderError"
+    const val SUMMARY = "reminderSummary"
+}
 
 @Composable
 fun ProfileScreen(modifier: Modifier = Modifier) {
@@ -382,7 +392,7 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
                 singleLine = true,
                 isError = reminderErrorMessage != null,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().testTag(ReminderTestTags.FIRST_INPUT)
             )
             Spacer(modifier = Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -396,7 +406,7 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
                     singleLine = true,
                     isError = reminderErrorMessage != null,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f).testTag(ReminderTestTags.SECOND_INPUT)
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Button(onClick = {
@@ -419,7 +429,7 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
                         reminderErrorMessage = "First warning must be 2-${StepTrackerConfig.REMINDER_MINUTES_BEFORE_MAX} minutes, " +
                                 "and the final alert must be at least 1 minute and less than the first warning"
                     }
-                }) {
+                }, modifier = Modifier.testTag(ReminderTestTags.SAVE)) {
                     Text("Save")
                 }
             }
@@ -429,7 +439,7 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
                     text = message,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(start = 8.dp, top = 4.dp)
+                    modifier = Modifier.padding(start = 8.dp, top = 4.dp).testTag(ReminderTestTags.ERROR)
                 )
             }
 
@@ -438,7 +448,7 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
                         "XX:${"%02d".format(AlarmScheduler.reminderMinuteOfHour(secondMinutesBefore))} when you're below your hourly goal (8am-10pm).",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 8.dp, top = 4.dp)
+                modifier = Modifier.padding(start = 8.dp, top = 4.dp).testTag(ReminderTestTags.SUMMARY)
             )
         }
 

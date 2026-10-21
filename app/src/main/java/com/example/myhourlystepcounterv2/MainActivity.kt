@@ -15,7 +15,6 @@ import com.example.myhourlystepcounterv2.ui.MyHourlyStepCounterV2App
 import com.example.myhourlystepcounterv2.ui.StepCounterViewModel
 import com.example.myhourlystepcounterv2.ui.StepCounterViewModelFactory
 import com.example.myhourlystepcounterv2.ui.theme.MyHourlyStepCounterV2Theme
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
@@ -68,39 +67,13 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Schedule step reminder alarms (both first and second reminders). Re-runs whenever the
-        // toggle or either configured offset changes, replacing the pending alarms.
+        // Schedule step reminder alarms (both first and second reminders), following the
+        // reminder settings for as long as the activity is alive.
         lifecycleScope.launch {
-            combine(
-                preferences.reminderNotificationEnabled,
-                preferences.firstReminderMinutesBefore,
-                preferences.secondReminderMinutesBefore
-            ) { enabled, first, second -> Triple(enabled, first, second) }
-                .distinctUntilChanged()
-                .collect { (enabled, firstMinutesBefore, secondMinutesBefore) ->
-                    if (enabled) {
-                        com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleStepReminders(
-                            applicationContext,
-                            minutesBefore = firstMinutesBefore
-                        )
-                        com.example.myhourlystepcounterv2.notifications.AlarmScheduler.scheduleSecondStepReminder(
-                            applicationContext,
-                            minutesBefore = secondMinutesBefore
-                        )
-                        android.util.Log.d(
-                            "MainActivity",
-                            "Step reminders scheduled ($firstMinutesBefore and $secondMinutesBefore min before the hour)"
-                        )
-                    } else {
-                        com.example.myhourlystepcounterv2.notifications.AlarmScheduler.cancelStepReminders(
-                            applicationContext
-                        )
-                        com.example.myhourlystepcounterv2.notifications.AlarmScheduler.cancelSecondStepReminder(
-                            applicationContext
-                        )
-                        android.util.Log.d("MainActivity", "Step reminders cancelled")
-                    }
-                }
+            com.example.myhourlystepcounterv2.notifications.ReminderAlarmSync.syncWithPreferences(
+                applicationContext,
+                preferences
+            )
         }
 
         // Schedule hour boundary alarms (always enabled for notification resets)

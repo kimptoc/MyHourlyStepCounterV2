@@ -100,6 +100,8 @@ dependencies {
     testImplementation("org.robolectric:robolectric:4.11")
     testImplementation(libs.androidx.work.testing) // Can be here if only for local tests
     testImplementation(libs.mockk)
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4) // Compose UI tests under Robolectric
 
 
     // Dependencies only for instrumentation tests
