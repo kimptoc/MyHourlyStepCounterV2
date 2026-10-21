@@ -125,6 +125,15 @@ class StepCounterForegroundService : android.app.Service() {
         }
 
         /**
+         * Whether the stored hour baseline can be used for a checkpoint of [currentHourTimestamp].
+         * The baseline is only valid for the hour it was set at; once the wall clock has moved on
+         * and the boundary hasn't been processed, the delta belongs to the previous hour, which
+         * the boundary handler saves. A missing saved hour (0) is left to the baseline check.
+         */
+        fun isCheckpointBaselineForHour(baselineHourTimestamp: Long, currentHourTimestamp: Long): Boolean =
+            baselineHourTimestamp == 0L || baselineHourTimestamp == currentHourTimestamp
+
+        /**
          * Tries to get a confirmed fresh sensor reading via flush, falling back to re-registering
          * the listener if the flush doesn't confirm within its budget (issue #36). On-device
          * evidence gathered after #33/#34 shipped found flush alone never confirmed in 8 attempts
@@ -1602,12 +1611,31 @@ class StepCounterForegroundService : android.app.Service() {
         scope.cancel()
     }
 
-    private suspend fun saveCurrentHourCheckpoint(currentDeviceTotal: Int) {
+    /**
+     * Takes [HourBoundaryCloser.mutex] so the baseline and the hour it belongs to are read as a
+     * pair. Without it, a checkpoint whose flush wait straddled XX:00 paired the previous hour's
+     * baseline with the new wall-clock hour, writing the whole previous hour's steps into the new
+     * hour's row — which the UI then showed as the new hour's count, and the daily total counted
+     * twice.
+     */
+    private suspend fun saveCurrentHourCheckpoint(currentDeviceTotal: Int) =
+        HourBoundaryCloser.mutex.withLock { saveCurrentHourCheckpointLocked(currentDeviceTotal) }
+
+    private suspend fun saveCurrentHourCheckpointLocked(currentDeviceTotal: Int) {
         val currentHourTimestamp = java.util.Calendar.getInstance().apply {
             set(java.util.Calendar.MINUTE, 0)
             set(java.util.Calendar.SECOND, 0)
             set(java.util.Calendar.MILLISECOND, 0)
         }.timeInMillis
+        val baselineHourTimestamp = preferences.currentHourTimestamp.first()
+        if (!isCheckpointBaselineForHour(baselineHourTimestamp, currentHourTimestamp)) {
+            android.util.Log.i(
+                "StepCounterFGSvc",
+                "Checkpoint skipped: baseline belongs to ${java.util.Date(baselineHourTimestamp)}, not current hour " +
+                    "${java.util.Date(currentHourTimestamp)}; hour boundary not processed yet"
+            )
+            return
+        }
         val baseline = preferences.hourStartStepCount.first()
         if (baseline <= 0) {
             val now = System.currentTimeMillis()
