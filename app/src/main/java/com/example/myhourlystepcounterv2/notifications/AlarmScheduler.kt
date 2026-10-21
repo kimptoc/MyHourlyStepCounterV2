@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import com.example.myhourlystepcounterv2.StepTrackerConfig
 import java.util.Calendar
 
 object AlarmScheduler {
@@ -17,6 +18,12 @@ object AlarmScheduler {
     private const val BOUNDARY_CHECK_INTERVAL_MS = 15 * 60 * 1000L
 
     private const val TAG = "AlarmScheduler"
+
+    /** Minute of the hour at which a reminder [minutesBefore] the end of the hour fires. */
+    internal fun reminderMinuteOfHour(minutesBefore: Int): Int =
+        (60 - minutesBefore).coerceIn(1, 59)
+
+    private fun formatMinute(minute: Int): String = String.format(java.util.Locale.US, "%02d", minute)
 
     /**
      * True when we should attempt an exact alarm: SCHEDULE_EXACT_ALARM granted, explicitly
@@ -67,10 +74,14 @@ object AlarmScheduler {
     }
 
     /**
-     * Schedule exact alarm at 50 minutes past the current/next hour (XX:50)
-     * Uses setExactAndAllowWhileIdle for precise timing even during doze mode
+     * Schedule exact alarm [minutesBefore] minutes before the end of the current/next hour
+     * (XX:50 by default). Uses setExactAndAllowWhileIdle for precise timing even during doze mode
      */
-    fun scheduleStepReminders(context: Context, skipPermissionCheck: Boolean = false) {
+    fun scheduleStepReminders(
+        context: Context,
+        skipPermissionCheck: Boolean = false,
+        minutesBefore: Int = StepTrackerConfig.FIRST_REMINDER_MINUTES_BEFORE_DEFAULT
+    ) {
         // Create explicit intent to target the receiver directly
         // With exported="false" in manifest, this prevents duplicate deliveries
         val intent = Intent(context, StepReminderReceiver::class.java).apply {
@@ -84,13 +95,14 @@ object AlarmScheduler {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        // Calculate next XX:50 time
+        // Calculate next XX:mm time
+        val minute = reminderMinuteOfHour(minutesBefore)
         val calendar = Calendar.getInstance().apply {
-            if (get(Calendar.MINUTE) >= 50) {
-                // If past :50, schedule for next hour
+            if (get(Calendar.MINUTE) >= minute) {
+                // If past the reminder minute, schedule for next hour
                 add(Calendar.HOUR_OF_DAY, 1)
             }
-            set(Calendar.MINUTE, 50)
+            set(Calendar.MINUTE, minute)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
@@ -102,7 +114,7 @@ object AlarmScheduler {
             skipPermissionCheck = skipPermissionCheck,
             triggerAtMillis = calendar.timeInMillis,
             pendingIntent = pendingIntent,
-            description = "Step reminder (:50)"
+            description = "Step reminder (:${formatMinute(minute)})"
         )
     }
 
@@ -132,11 +144,15 @@ object AlarmScheduler {
     }
 
     /**
-     * Schedule exact alarm at 55 minutes past the current/next hour (XX:55)
-     * This is the second, more urgent reminder if steps are still below threshold
-     * Uses setExactAndAllowWhileIdle for precise timing even during doze mode
+     * Schedule exact alarm [minutesBefore] minutes before the end of the current/next hour
+     * (XX:55 by default). This is the second, more urgent reminder if steps are still below
+     * threshold. Uses setExactAndAllowWhileIdle for precise timing even during doze mode
      */
-    fun scheduleSecondStepReminder(context: Context, skipPermissionCheck: Boolean = false) {
+    fun scheduleSecondStepReminder(
+        context: Context,
+        skipPermissionCheck: Boolean = false,
+        minutesBefore: Int = StepTrackerConfig.SECOND_REMINDER_MINUTES_BEFORE_DEFAULT
+    ) {
         // Create explicit intent to target the receiver directly
         // Use same receiver but different request code
         val intent = Intent(context, StepReminderReceiver::class.java).apply {
@@ -150,13 +166,14 @@ object AlarmScheduler {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        // Calculate next XX:55 time
+        // Calculate next XX:mm time
+        val minute = reminderMinuteOfHour(minutesBefore)
         val calendar = Calendar.getInstance().apply {
-            if (get(Calendar.MINUTE) >= 55) {
-                // If past :55, schedule for next hour
+            if (get(Calendar.MINUTE) >= minute) {
+                // If past the reminder minute, schedule for next hour
                 add(Calendar.HOUR_OF_DAY, 1)
             }
-            set(Calendar.MINUTE, 55)
+            set(Calendar.MINUTE, minute)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
@@ -168,16 +185,20 @@ object AlarmScheduler {
             skipPermissionCheck = skipPermissionCheck,
             triggerAtMillis = calendar.timeInMillis,
             pendingIntent = pendingIntent,
-            description = "Second step reminder (:55)"
+            description = "Second step reminder (:${formatMinute(minute)})"
         )
     }
 
     /**
-     * Schedule step reminder for the next in-window time (08:50).
+     * Schedule step reminder for the next in-window time (08:50 by default).
      * Used when currently outside the 8am–10pm quiet hours window to avoid
      * waking the device every hour overnight.
      */
-    fun scheduleStepRemindersNextWindow(context: Context, skipPermissionCheck: Boolean = false) {
+    fun scheduleStepRemindersNextWindow(
+        context: Context,
+        skipPermissionCheck: Boolean = false,
+        minutesBefore: Int = StepTrackerConfig.FIRST_REMINDER_MINUTES_BEFORE_DEFAULT
+    ) {
         val intent = Intent(context, StepReminderReceiver::class.java).apply {
             action = StepReminderReceiver.ACTION_STEP_REMINDER
         }
@@ -187,10 +208,11 @@ object AlarmScheduler {
         )
 
         // Next day if after 10pm; same day if before 8am
+        val minute = reminderMinuteOfHour(minutesBefore)
         val calendar = Calendar.getInstance().apply {
             if (get(Calendar.HOUR_OF_DAY) >= 22) add(Calendar.DAY_OF_YEAR, 1)
             set(Calendar.HOUR_OF_DAY, 8)
-            set(Calendar.MINUTE, 50)
+            set(Calendar.MINUTE, minute)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
@@ -199,15 +221,19 @@ object AlarmScheduler {
             skipPermissionCheck = skipPermissionCheck,
             triggerAtMillis = calendar.timeInMillis,
             pendingIntent = pendingIntent,
-            description = "Step reminder (next window 08:50)"
+            description = "Step reminder (next window 08:${formatMinute(minute)})"
         )
     }
 
     /**
-     * Schedule second step reminder for the next in-window time (08:55).
+     * Schedule second step reminder for the next in-window time (08:55 by default).
      * Used when currently outside the 8am–10pm quiet hours window.
      */
-    fun scheduleSecondStepReminderNextWindow(context: Context, skipPermissionCheck: Boolean = false) {
+    fun scheduleSecondStepReminderNextWindow(
+        context: Context,
+        skipPermissionCheck: Boolean = false,
+        minutesBefore: Int = StepTrackerConfig.SECOND_REMINDER_MINUTES_BEFORE_DEFAULT
+    ) {
         val intent = Intent(context, StepReminderReceiver::class.java).apply {
             action = StepReminderReceiver.ACTION_SECOND_STEP_REMINDER
         }
@@ -217,10 +243,11 @@ object AlarmScheduler {
         )
 
         // Next day if after 10pm; same day if before 8am
+        val minute = reminderMinuteOfHour(minutesBefore)
         val calendar = Calendar.getInstance().apply {
             if (get(Calendar.HOUR_OF_DAY) >= 22) add(Calendar.DAY_OF_YEAR, 1)
             set(Calendar.HOUR_OF_DAY, 8)
-            set(Calendar.MINUTE, 55)
+            set(Calendar.MINUTE, minute)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
@@ -229,7 +256,7 @@ object AlarmScheduler {
             skipPermissionCheck = skipPermissionCheck,
             triggerAtMillis = calendar.timeInMillis,
             pendingIntent = pendingIntent,
-            description = "Second step reminder (next window 08:55)"
+            description = "Second step reminder (next window 08:${formatMinute(minute)})"
         )
     }
 

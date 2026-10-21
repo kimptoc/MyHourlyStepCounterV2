@@ -35,17 +35,24 @@ class StepReminderReceiver : BroadcastReceiver() {
                 val repository = StepRepository(
                     StepDatabase.getDatabase(context.applicationContext).stepDao()
                 )
-                val reminderType = if (isSecondReminder) "Second (XX:55)" else "First (XX:50)"
+                val firstMinutesBefore = preferences.firstReminderMinutesBefore.first()
+                val secondMinutesBefore = preferences.secondReminderMinutesBefore.first()
+                val minutesBefore = if (isSecondReminder) secondMinutesBefore else firstMinutesBefore
+                val reminderType = "${if (isSecondReminder) "Second" else "First"} ($minutesBefore min before hour)"
 
                 // Check if current time is within allowed window (8am to 10pm)
                 val currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
                 if (currentHour < 8 || currentHour >= 22) { // 8am to 10pm (22:00)
                     android.util.Log.d("StepReminder", "$reminderType: Outside allowed time window (8am-10pm), skipping")
-                    // Schedule directly for 08:50/08:55 to avoid waking up every hour overnight
+                    // Schedule directly for the 8am-hour reminder to avoid waking up every hour overnight
                     if (isSecondReminder) {
-                        AlarmScheduler.scheduleSecondStepReminderNextWindow(context.applicationContext)
+                        AlarmScheduler.scheduleSecondStepReminderNextWindow(
+                            context.applicationContext, minutesBefore = minutesBefore
+                        )
                     } else {
-                        AlarmScheduler.scheduleStepRemindersNextWindow(context.applicationContext)
+                        AlarmScheduler.scheduleStepRemindersNextWindow(
+                            context.applicationContext, minutesBefore = minutesBefore
+                        )
                     }
                     return@launch
                 }
@@ -56,19 +63,23 @@ class StepReminderReceiver : BroadcastReceiver() {
                     android.util.Log.d("StepReminder", "$reminderType: Reminder notifications disabled, skipping")
                     // Still reschedule for next hour to continue the cycle
                     if (isSecondReminder) {
-                        AlarmScheduler.scheduleSecondStepReminder(context.applicationContext)
+                        AlarmScheduler.scheduleSecondStepReminder(
+                            context.applicationContext, minutesBefore = minutesBefore
+                        )
                     } else {
-                        AlarmScheduler.scheduleStepReminders(context.applicationContext)
+                        AlarmScheduler.scheduleStepReminders(
+                            context.applicationContext, minutesBefore = minutesBefore
+                        )
                     }
                     return@launch
                 }
 
                 if (isSecondReminder) {
-                    // Second reminder (XX:55) logic
-                    handleSecondReminderLogic(context.applicationContext, preferences, repository)
+                    // Second reminder logic
+                    handleSecondReminderLogic(context.applicationContext, preferences, repository, minutesBefore)
                 } else {
-                    // First reminder (XX:50) logic
-                    handleFirstReminderLogic(context.applicationContext, preferences, repository)
+                    // First reminder logic
+                    handleFirstReminderLogic(context.applicationContext, preferences, repository, minutesBefore)
                 }
             } catch (e: Exception) {
                 android.util.Log.e("StepReminder", "Error in reminder receiver", e)
@@ -81,7 +92,8 @@ class StepReminderReceiver : BroadcastReceiver() {
     private suspend fun handleFirstReminderLogic(
         context: Context,
         preferences: StepPreferences,
-        repository: StepRepository
+        repository: StepRepository,
+        minutesBefore: Int
     ) {
         // Check if we already sent notification this hour
         val lastNotificationTime = preferences.lastReminderNotificationTime.first()
@@ -90,7 +102,7 @@ class StepReminderReceiver : BroadcastReceiver() {
         if (lastNotificationTime >= currentHourStart) {
             android.util.Log.d("StepReminder", "First: Already sent notification this hour, skipping")
             // Still reschedule for next hour to continue the cycle
-            AlarmScheduler.scheduleStepReminders(context)
+            AlarmScheduler.scheduleStepReminders(context, minutesBefore = minutesBefore)
             return
         }
 
@@ -131,15 +143,16 @@ class StepReminderReceiver : BroadcastReceiver() {
             )
         }
 
-        // Reschedule the next alarm (1 hour from now at XX:50)
-        AlarmScheduler.scheduleStepReminders(context)
+        // Reschedule the next alarm (1 hour from now)
+        AlarmScheduler.scheduleStepReminders(context, minutesBefore = minutesBefore)
         android.util.Log.d("StepReminder", "First: Rescheduled next alarm for 1 hour from now")
     }
 
     private suspend fun handleSecondReminderLogic(
         context: Context,
         preferences: StepPreferences,
-        repository: StepRepository
+        repository: StepRepository,
+        minutesBefore: Int
     ) {
         // Check if we already sent second reminder this hour
         val lastSecondReminderTime = preferences.lastSecondReminderTime.first()
@@ -148,7 +161,7 @@ class StepReminderReceiver : BroadcastReceiver() {
         if (lastSecondReminderTime >= currentHourStart) {
             android.util.Log.d("StepReminder", "Second: Already sent notification this hour, skipping")
             // Still reschedule for next hour to continue the cycle
-            AlarmScheduler.scheduleSecondStepReminder(context)
+            AlarmScheduler.scheduleSecondStepReminder(context, minutesBefore = minutesBefore)
             return
         }
 
@@ -168,7 +181,8 @@ class StepReminderReceiver : BroadcastReceiver() {
             NotificationHelper.sendSecondStepReminderNotification(
                 context,
                 currentHourSteps,
-                goal
+                goal,
+                minutesBefore
             )
 
             // Record notification time and state
@@ -186,8 +200,8 @@ class StepReminderReceiver : BroadcastReceiver() {
             )
         }
 
-        // Reschedule the next alarm (1 hour from now at XX:55)
-        AlarmScheduler.scheduleSecondStepReminder(context)
+        // Reschedule the next alarm (1 hour from now)
+        AlarmScheduler.scheduleSecondStepReminder(context, minutesBefore = minutesBefore)
         android.util.Log.d("StepReminder", "Second: Rescheduled next alarm for 1 hour from now")
     }
 

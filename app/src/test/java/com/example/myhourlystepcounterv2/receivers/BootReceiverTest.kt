@@ -100,6 +100,8 @@ class BootReceiverTest {
         val intent = Intent(Intent.ACTION_MY_PACKAGE_REPLACED)
         whenever(mockPreferences.permanentNotificationEnabled).thenReturn(flowOf(true))
         whenever(mockPreferences.reminderNotificationEnabled).thenReturn(flowOf(true))
+        whenever(mockPreferences.firstReminderMinutesBefore).thenReturn(flowOf(10))
+        whenever(mockPreferences.secondReminderMinutesBefore).thenReturn(flowOf(5))
 
         // When
         receiver.onReceive(context, intent)

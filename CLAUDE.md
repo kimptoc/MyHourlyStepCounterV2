@@ -131,6 +131,7 @@ The app uses **MVVM architecture with Repository pattern** in a single-activity 
    - `permanentNotificationEnabled`: Toggle for persistent notification
    - `useWakeLock`: Toggle for a short-lived wake lock held only during hour-boundary/backfill processing (not continuous)
    - `reminderNotificationEnabled`: Toggle for step reminder notifications
+   - `firstReminderMinutesBefore` / `secondReminderMinutesBefore`: User-configurable reminder offsets (defaults 10 and 5 minutes before the hour; the second must be closer to the hour than the first)
 
 ### Sensor Layer
 8. **StepSensorManager:** Manages TYPE_STEP_COUNTER sensor:
@@ -149,7 +150,7 @@ The app uses **MVVM architecture with Repository pattern** in a single-activity 
    - Acquires a short-lived wake lock (auto-released after 2 min) only around hour-boundary/backfill work, never held continuously; the device can deep-sleep between hours
 
 10. **AlarmManager:**
-   - **AlarmScheduler:** Schedules precise alarms for step reminders (XX:50) and hour boundaries (XX:00)
+   - **AlarmScheduler:** Schedules precise alarms for step reminders (XX:50 and XX:55 by default, configurable in Profile) and hour boundaries (XX:00)
    - **StepReminderReceiver:** BroadcastReceiver that sends step reminder notifications
    - 5-minute reminder uses a dedicated urgent channel with triple-buzz vibration (no sound)
    - **HourBoundaryReceiver:** BroadcastReceiver that processes hour boundaries and saves data
