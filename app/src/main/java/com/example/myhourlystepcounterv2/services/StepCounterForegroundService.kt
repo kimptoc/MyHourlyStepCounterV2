@@ -778,7 +778,7 @@ class StepCounterForegroundService : android.app.Service() {
                 val currentTotal = sensorManager.getCurrentTotalSteps()
                 if (currentTotal > 0) {
                     preferences.saveDeviceTotalSnapshot(System.currentTimeMillis(), currentTotal)
-                    saveCurrentHourCheckpoint(currentTotal)
+                    saveCurrentHourCheckpoint()
                     // Keep TOTAL_STEPS_DEVICE fresh between hour boundaries. Without this
                     // it only updates at hour boundaries, leaving stale data that breaks
                     // pre-reboot offset recovery for mid-hour reboots (issue #7).
@@ -1612,16 +1612,19 @@ class StepCounterForegroundService : android.app.Service() {
     }
 
     /**
-     * Takes [HourBoundaryCloser.mutex] so the baseline and the hour it belongs to are read as a
-     * pair. Without it, a checkpoint whose flush wait straddled XX:00 paired the previous hour's
+     * Takes [HourBoundaryCloser.mutex] so the device total, the baseline and the hour it belongs
+     * to are read at one consistent point. Without it, a checkpoint whose flush wait straddled XX:00 paired the previous hour's
      * baseline with the new wall-clock hour, writing the whole previous hour's steps into the new
      * hour's row — which the UI then showed as the new hour's count, and the daily total counted
-     * twice.
+     * twice. The device total is re-read inside the lock: one captured before it, from the old
+     * hour, would otherwise be measured against a baseline the boundary handler just reset.
      */
-    private suspend fun saveCurrentHourCheckpoint(currentDeviceTotal: Int) =
-        HourBoundaryCloser.mutex.withLock { saveCurrentHourCheckpointLocked(currentDeviceTotal) }
+    private suspend fun saveCurrentHourCheckpoint() =
+        HourBoundaryCloser.mutex.withLock { saveCurrentHourCheckpointLocked() }
 
-    private suspend fun saveCurrentHourCheckpointLocked(currentDeviceTotal: Int) {
+    private suspend fun saveCurrentHourCheckpointLocked() {
+        val currentDeviceTotal = sensorManager.getCurrentTotalSteps()
+        if (currentDeviceTotal <= 0) return
         val currentHourTimestamp = java.util.Calendar.getInstance().apply {
             set(java.util.Calendar.MINUTE, 0)
             set(java.util.Calendar.SECOND, 0)
