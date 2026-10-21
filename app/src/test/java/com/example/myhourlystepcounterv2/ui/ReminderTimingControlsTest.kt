@@ -1,6 +1,8 @@
 package com.example.myhourlystepcounterv2.ui
 
 import android.content.Context
+import android.content.pm.ActivityInfo
+import androidx.activity.ComponentActivity
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -23,21 +25,45 @@ import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.RuleChain
+import org.junit.rules.TestWatcher
+import org.junit.runner.Description
 import org.junit.runner.RunWith
+import org.robolectric.Shadows
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
  * Issue #42: the Reminder Timing controls on the Profile screen. Runs under Robolectric rather
  * than as an instrumented test so it runs in CI, and so it never touches the real app's saved
- * data on a connected phone.
+ * data on a connected phone. Most tests render [ReminderTimingSection] alone; one renders the
+ * whole [ProfileScreen] to check the section is wired in.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
 class ReminderTimingControlsTest {
 
-    @get:Rule
+    /**
+     * Registers the activity createComposeRule() launches. It is normally declared by the
+     * ui-test-manifest artifact, but that is a debugImplementation dependency, so the release
+     * variant's unit tests would otherwise fail to resolve it. Must run before the compose rule.
+     */
+    private val registerComposeHostActivity = object : TestWatcher() {
+        override fun starting(description: Description) {
+            val context = ApplicationProvider.getApplicationContext<Context>()
+            Shadows.shadowOf(context.packageManager).addOrUpdateActivity(
+                ActivityInfo().apply {
+                    name = ComponentActivity::class.java.name
+                    packageName = context.packageName
+                }
+            )
+        }
+    }
+
     val composeTestRule = createComposeRule()
+
+    @get:Rule
+    val rules: RuleChain = RuleChain.outerRule(registerComposeHostActivity).around(composeTestRule)
 
     private lateinit var preferences: StepPreferences
 
@@ -48,14 +74,14 @@ class ReminderTimingControlsTest {
         runBlocking { preferences.clearAll() }
     }
 
-    private fun setProfileContent() {
+    private fun setSectionContent() {
         composeTestRule.setContent {
-            MyHourlyStepCounterV2Theme { ProfileScreen() }
+            MyHourlyStepCounterV2Theme { ReminderTimingSection(preferences) }
         }
     }
 
     private fun node(tag: String): SemanticsNodeInteraction =
-        composeTestRule.onNodeWithTag(tag, useUnmergedTree = true).performScrollTo()
+        composeTestRule.onNodeWithTag(tag, useUnmergedTree = true)
 
     /** DataStore writes and reads land off the UI thread, so wait for the UI to catch up. */
     private fun waitForSummary(first: Int, second: Int) {
@@ -80,7 +106,7 @@ class ReminderTimingControlsTest {
     }
 
     private fun assertRejected(first: String, second: String) {
-        setProfileContent()
+        setSectionContent()
         waitForSummary(10, 5)
 
         enterAndSave(first, second)
@@ -92,7 +118,7 @@ class ReminderTimingControlsTest {
 
     @Test
     fun showsDefaultOffsets_whenNothingSaved() {
-        setProfileContent()
+        setSectionContent()
         waitForSummary(10, 5)
 
         node(ReminderTestTags.FIRST_INPUT).assertTextContains("10")
@@ -100,9 +126,20 @@ class ReminderTimingControlsTest {
     }
 
     @Test
+    fun profileScreen_includesReminderTimingSection() {
+        composeTestRule.setContent {
+            MyHourlyStepCounterV2Theme { ProfileScreen() }
+        }
+        waitForSummary(10, 5)
+
+        node(ReminderTestTags.FIRST_INPUT).performScrollTo().assertTextContains("10")
+        node(ReminderTestTags.SAVE).performScrollTo()
+    }
+
+    @Test
     fun showsSavedOffsets_whenAlreadyConfigured() {
         runBlocking { preferences.saveReminderMinutesBefore(12, 6) }
-        setProfileContent()
+        setSectionContent()
         waitForSummary(12, 6)
 
         node(ReminderTestTags.FIRST_INPUT).assertTextContains("12")
@@ -111,7 +148,7 @@ class ReminderTimingControlsTest {
 
     @Test
     fun validInput_isSaved_andSummaryUpdates() {
-        setProfileContent()
+        setSectionContent()
         waitForSummary(10, 5)
 
         enterAndSave("15", "3")
@@ -141,7 +178,7 @@ class ReminderTimingControlsTest {
 
     @Test
     fun editingAfterAnError_clearsTheError() {
-        setProfileContent()
+        setSectionContent()
         waitForSummary(10, 5)
         enterAndSave("5", "10")
         node(ReminderTestTags.ERROR).assertTextContains("First warning must be", substring = true)
@@ -152,11 +189,11 @@ class ReminderTimingControlsTest {
     }
 
     @Test
-    fun savedOffsets_surviveLeavingAndReturningToProfile() {
+    fun savedOffsets_surviveLeavingAndReturningToTheSection() {
         var showProfile by mutableStateOf(true)
         composeTestRule.setContent {
             MyHourlyStepCounterV2Theme {
-                if (showProfile) ProfileScreen() else Text("Home")
+                if (showProfile) ReminderTimingSection(preferences) else Text("Home")
             }
         }
         waitForSummary(10, 5)

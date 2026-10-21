@@ -361,96 +361,7 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
         Spacer(modifier = Modifier.height(16.dp))
 
         // Reminder timing (user-configurable minutes before the end of the hour)
-        Column(
-            horizontalAlignment = Alignment.Start,
-            modifier = Modifier.padding(16.dp)
-        ) {
-            val firstMinutesBefore by preferences.firstReminderMinutesBefore.collectAsState(
-                initial = com.example.myhourlystepcounterv2.data.StepPreferences.FIRST_REMINDER_MINUTES_BEFORE_DEFAULT
-            )
-            val secondMinutesBefore by preferences.secondReminderMinutesBefore.collectAsState(
-                initial = com.example.myhourlystepcounterv2.data.StepPreferences.SECOND_REMINDER_MINUTES_BEFORE_DEFAULT
-            )
-            var firstInput by remember(firstMinutesBefore) { mutableStateOf(firstMinutesBefore.toString()) }
-            var secondInput by remember(secondMinutesBefore) { mutableStateOf(secondMinutesBefore.toString()) }
-            var reminderErrorMessage by remember { mutableStateOf<String?>(null) }
-
-            Text(
-                text = "Reminder Timing",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(bottom = 16.dp)
-            )
-
-            OutlinedTextField(
-                value = firstInput,
-                onValueChange = {
-                    firstInput = it
-                    reminderErrorMessage = null
-                },
-                label = { Text("First warning (minutes before hour)") },
-                singleLine = true,
-                isError = reminderErrorMessage != null,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth().testTag(ReminderTestTags.FIRST_INPUT)
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = secondInput,
-                    onValueChange = {
-                        secondInput = it
-                        reminderErrorMessage = null
-                    },
-                    label = { Text("Final alert (minutes before hour)") },
-                    singleLine = true,
-                    isError = reminderErrorMessage != null,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.weight(1f).testTag(ReminderTestTags.SECOND_INPUT)
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Button(onClick = {
-                    val parsedFirst = firstInput.trim().toIntOrNull()
-                    val parsedSecond = secondInput.trim().toIntOrNull()
-                    if (parsedFirst != null && parsedSecond != null &&
-                        com.example.myhourlystepcounterv2.data.StepPreferences.isValidReminderOffsets(parsedFirst, parsedSecond)
-                    ) {
-                        reminderErrorMessage = null
-                        coroutineScope.launch {
-                            try {
-                                preferences.saveReminderMinutesBefore(parsedFirst, parsedSecond)
-                            } catch (e: kotlinx.coroutines.CancellationException) {
-                                throw e
-                            } catch (e: Exception) {
-                                reminderErrorMessage = "Failed to save reminder timing. Please try again."
-                            }
-                        }
-                    } else {
-                        reminderErrorMessage = "First warning must be 2-${StepTrackerConfig.REMINDER_MINUTES_BEFORE_MAX} minutes, " +
-                                "and the final alert must be at least 1 minute and less than the first warning"
-                    }
-                }, modifier = Modifier.testTag(ReminderTestTags.SAVE)) {
-                    Text("Save")
-                }
-            }
-
-            reminderErrorMessage?.let { message ->
-                Text(
-                    text = message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(start = 8.dp, top = 4.dp).testTag(ReminderTestTags.ERROR)
-                )
-            }
-
-            Text(
-                text = "Reminders fire at XX:${"%02d".format(AlarmScheduler.reminderMinuteOfHour(firstMinutesBefore))} and " +
-                        "XX:${"%02d".format(AlarmScheduler.reminderMinuteOfHour(secondMinutesBefore))} when you're below your hourly goal (8am-10pm).",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 8.dp, top = 4.dp).testTag(ReminderTestTags.SUMMARY)
-            )
-        }
+        ReminderTimingSection(preferences)
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -575,5 +486,105 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
                 }
             }
         }
+    }
+}
+
+/**
+ * The Reminder Timing settings: the two "minutes before the hour" fields, Save, validation error
+ * and the resulting schedule summary. Separate from [ProfileScreen] so it can be tested without
+ * the rest of the screen's database and polling work (issue #42).
+ */
+@Composable
+internal fun ReminderTimingSection(preferences: com.example.myhourlystepcounterv2.data.StepPreferences) {
+    val coroutineScope = rememberCoroutineScope()
+    Column(
+        horizontalAlignment = Alignment.Start,
+        modifier = Modifier.padding(16.dp)
+    ) {
+        val firstMinutesBefore by preferences.firstReminderMinutesBefore.collectAsState(
+            initial = com.example.myhourlystepcounterv2.data.StepPreferences.FIRST_REMINDER_MINUTES_BEFORE_DEFAULT
+        )
+        val secondMinutesBefore by preferences.secondReminderMinutesBefore.collectAsState(
+            initial = com.example.myhourlystepcounterv2.data.StepPreferences.SECOND_REMINDER_MINUTES_BEFORE_DEFAULT
+        )
+        var firstInput by remember(firstMinutesBefore) { mutableStateOf(firstMinutesBefore.toString()) }
+        var secondInput by remember(secondMinutesBefore) { mutableStateOf(secondMinutesBefore.toString()) }
+        var reminderErrorMessage by remember { mutableStateOf<String?>(null) }
+
+        Text(
+            text = "Reminder Timing",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
+
+        OutlinedTextField(
+            value = firstInput,
+            onValueChange = {
+                firstInput = it
+                reminderErrorMessage = null
+            },
+            label = { Text("First warning (minutes before hour)") },
+            singleLine = true,
+            isError = reminderErrorMessage != null,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth().testTag(ReminderTestTags.FIRST_INPUT)
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = secondInput,
+                onValueChange = {
+                    secondInput = it
+                    reminderErrorMessage = null
+                },
+                label = { Text("Final alert (minutes before hour)") },
+                singleLine = true,
+                isError = reminderErrorMessage != null,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(1f).testTag(ReminderTestTags.SECOND_INPUT)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Button(onClick = {
+                val parsedFirst = firstInput.trim().toIntOrNull()
+                val parsedSecond = secondInput.trim().toIntOrNull()
+                if (parsedFirst != null && parsedSecond != null &&
+                    com.example.myhourlystepcounterv2.data.StepPreferences.isValidReminderOffsets(parsedFirst, parsedSecond)
+                ) {
+                    reminderErrorMessage = null
+                    coroutineScope.launch {
+                        try {
+                            preferences.saveReminderMinutesBefore(parsedFirst, parsedSecond)
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            reminderErrorMessage = "Failed to save reminder timing. Please try again."
+                        }
+                    }
+                } else {
+                    reminderErrorMessage = "First warning must be 2-${StepTrackerConfig.REMINDER_MINUTES_BEFORE_MAX} minutes, " +
+                            "and the final alert must be at least 1 minute and less than the first warning"
+                }
+            }, modifier = Modifier.testTag(ReminderTestTags.SAVE)) {
+                Text("Save")
+            }
+        }
+
+        reminderErrorMessage?.let { message ->
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(start = 8.dp, top = 4.dp).testTag(ReminderTestTags.ERROR)
+            )
+        }
+
+        Text(
+            text = "Reminders fire at XX:${"%02d".format(AlarmScheduler.reminderMinuteOfHour(firstMinutesBefore))} and " +
+                    "XX:${"%02d".format(AlarmScheduler.reminderMinuteOfHour(secondMinutesBefore))} when you're below your hourly goal (8am-10pm).",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 8.dp, top = 4.dp).testTag(ReminderTestTags.SUMMARY)
+        )
     }
 }

@@ -4,7 +4,6 @@ import android.app.AlarmManager
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.myhourlystepcounterv2.data.StepPreferences
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -41,17 +40,33 @@ class ReminderAlarmSyncTest {
         shadowAlarmManager = Shadows.shadowOf(context.getSystemService(Context.ALARM_SERVICE) as AlarmManager)
     }
 
-    private fun scheduledReminderMinutes(): Set<Int> =
-        shadowAlarmManager.scheduledAlarms
-            .filter {
-                Shadows.shadowOf(it.operation).savedIntent.action in setOf(
-                    StepReminderReceiver.ACTION_STEP_REMINDER,
-                    StepReminderReceiver.ACTION_SECOND_STEP_REMINDER
-                )
-            }
+    /**
+     * Minute-of-hour of each pending reminder alarm. Also checks every alarm is due within the
+     * next hour, so a reminder scheduled at the right minute of the wrong hour still fails.
+     */
+    private fun scheduledReminderMinutes(): Set<Int> {
+        val now = System.currentTimeMillis()
+        val reminders = shadowAlarmManager.scheduledAlarms.filter {
+            Shadows.shadowOf(it.operation).savedIntent.action in setOf(
+                StepReminderReceiver.ACTION_STEP_REMINDER,
+                StepReminderReceiver.ACTION_SECOND_STEP_REMINDER
+            )
+        }
+        reminders.forEach {
+            assertTrue(
+                "Reminder due at ${java.util.Date(it.triggerAtMs)} is not within the next hour",
+                it.triggerAtMs in now..now + 60 * 60 * 1000L
+            )
+        }
+        return reminders
             .map { Calendar.getInstance().apply { timeInMillis = it.triggerAtMs }.get(Calendar.MINUTE) }
             .toSet()
+    }
 
+    /**
+     * The collector is launched in the test's own runBlocking scope, so alarm scheduling and these
+     * shadow reads happen on the same thread; the delay just yields to it.
+     */
     private suspend fun awaitReminderMinutes(expected: Set<Int>) {
         withTimeout(5_000) {
             while (scheduledReminderMinutes() != expected) delay(20)
@@ -76,7 +91,7 @@ class ReminderAlarmSyncTest {
 
     @Test
     fun savingNewOffsets_reschedulesTheReminderAlarms() = runBlocking {
-        val sync = launch(Dispatchers.Default) {
+        val sync = launch {
             ReminderAlarmSync.syncWithPreferences(context, preferences, skipPermissionCheck = true)
         }
         try {
@@ -93,7 +108,7 @@ class ReminderAlarmSyncTest {
 
     @Test
     fun turningRemindersOff_cancelsTheReminderAlarms() = runBlocking {
-        val sync = launch(Dispatchers.Default) {
+        val sync = launch {
             ReminderAlarmSync.syncWithPreferences(context, preferences, skipPermissionCheck = true)
         }
         try {
