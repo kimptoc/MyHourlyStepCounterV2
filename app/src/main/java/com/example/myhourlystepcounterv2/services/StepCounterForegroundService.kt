@@ -330,7 +330,8 @@ class StepCounterForegroundService : android.app.Service() {
 
         /**
          * Hours that get a circle in the notification: the last MAX_TIMELINE_CIRCLES of
-         * the counted hours, ending at the current hour (no blank lookahead circle).
+         * the counted hours, ending at the current hour (no blank lookahead circle), or at
+         * the last active hour once the window has closed.
          */
         fun timelineCircleHours(currentHour: Int): IntRange {
             val counted = countedTimelineHours(currentHour)
