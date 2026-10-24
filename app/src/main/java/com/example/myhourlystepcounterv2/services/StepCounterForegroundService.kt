@@ -48,7 +48,7 @@ class StepCounterForegroundService : android.app.Service() {
         const val ACTION_STOP = "com.example.myhourlystepcounterv2.ACTION_STOP_FOREGROUND"
         const val ACTIVE_WINDOW_START_HOUR = 8
         const val ACTIVE_WINDOW_END_HOUR = 22
-        const val MAX_TIMELINE_CIRCLES = 10
+        const val MAX_TIMELINE_CIRCLES = 8
 
         // Staleness thresholds for sensor keepalive
         const val FLUSH_THRESHOLD_MS = 60_000L            // 1 min: flush FIFO before reading
