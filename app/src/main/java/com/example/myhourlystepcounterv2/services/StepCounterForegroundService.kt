@@ -1095,8 +1095,15 @@ class StepCounterForegroundService : android.app.Service() {
             set(java.util.Calendar.MILLISECOND, 0)
         }
         val stepsByTimestamp = dayHistory.associate { it.timestamp to it.stepCount }
-        val states = mutableListOf<String>()
-        var achievedHours = 0
+        fun hourTimestamp(hour: Int): Long =
+            (startOfDayCalendar.clone() as java.util.Calendar).apply {
+                set(java.util.Calendar.HOUR_OF_DAY, hour)
+            }.timeInMillis
+        fun isHit(hour: Int): Boolean = when {
+            hour < currentHour -> (stepsByTimestamp[hourTimestamp(hour)] ?: 0) >= goal
+            hour == currentHour -> !isSyncing && currentHourSteps >= goal
+            else -> false
+        }
 
         // Sliding window: show up to MAX_TIMELINE_CIRCLES, ending at current hour + 1.
         // Lookahead (+1) only applies while there are still hours left inside the window.
@@ -1109,40 +1116,23 @@ class StepCounterForegroundService : android.app.Service() {
         }
         val windowStart = maxOf(windowEnd - MAX_TIMELINE_CIRCLES + 1, ACTIVE_WINDOW_START_HOUR)
 
-        for (hour in windowStart..windowEnd) {
-            val hourTimestamp = (startOfDayCalendar.clone() as java.util.Calendar).apply {
-                set(java.util.Calendar.HOUR_OF_DAY, hour)
-            }.timeInMillis
-            val symbol = when {
-                hour < currentHour -> {
-                    val hit = (stepsByTimestamp[hourTimestamp] ?: 0) >= goal
-                    if (hit) {
-                        achievedHours += 1
-                        "🟢"
-                    } else {
-                        "❌"
-                    }
-                }
-                hour == currentHour -> {
-                    if (isSyncing) {
-                        "⏳"
-                    } else if (currentHourSteps >= goal) {
-                        achievedHours += 1
-                        "🟢"
-                    } else {
-                        "🟡"
-                    }
+        val states = (windowStart..windowEnd).map { hour ->
+            when {
+                hour < currentHour -> if (isHit(hour)) "🟢" else "❌"
+                hour == currentHour -> when {
+                    isSyncing -> "⏳"
+                    isHit(hour) -> "🟢"
+                    else -> "🟡"
                 }
                 else -> "⚪"
             }
-            states.add(symbol)
         }
 
-        val elapsedHours = when {
-            currentHour < ACTIVE_WINDOW_START_HOUR -> 0
-            currentHour >= ACTIVE_WINDOW_END_HOUR -> ACTIVE_WINDOW_END_HOUR - ACTIVE_WINDOW_START_HOUR
-            else -> currentHour - windowStart + 1
-        }
+        // The hits summary covers the whole active window so far, not just the
+        // hours that fit in the timeline.
+        val countedHours = ACTIVE_WINDOW_START_HOUR..minOf(currentHour, ACTIVE_WINDOW_END_HOUR - 1)
+        val achievedHours = countedHours.count { isHit(it) }
+        val elapsedHours = countedHours.count()
 
         return TimelinePresentation(
             statesExpanded = states.joinToString(" "),
