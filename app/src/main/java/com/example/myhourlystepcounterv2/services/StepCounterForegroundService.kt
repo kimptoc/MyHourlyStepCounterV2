@@ -315,6 +315,57 @@ class StepCounterForegroundService : android.app.Service() {
             return currentSyncing && lastSensorEventTimeMs > 0L
         }
 
+        data class TimelineSummary(
+            val states: List<String>,
+            val achievedHours: Int,
+            val elapsedHours: Int
+        )
+
+        /**
+         * Hours of the active window counted towards the hits summary: 08:00 up to the
+         * current hour, or the whole window once it has closed. Empty before 08:00.
+         */
+        fun countedTimelineHours(currentHour: Int): IntRange =
+            ACTIVE_WINDOW_START_HOUR..minOf(currentHour, ACTIVE_WINDOW_END_HOUR - 1)
+
+        /**
+         * Hours that get a circle in the notification: the last MAX_TIMELINE_CIRCLES of
+         * the counted hours, ending at the current hour (no blank lookahead circle).
+         */
+        fun timelineCircleHours(currentHour: Int): IntRange {
+            val counted = countedTimelineHours(currentHour)
+            return maxOf(counted.last - MAX_TIMELINE_CIRCLES + 1, counted.first)..counted.last
+        }
+
+        fun buildTimelineSummary(
+            currentHour: Int,
+            goal: Int,
+            currentHourSteps: Int,
+            isSyncing: Boolean,
+            stepsForHour: (Int) -> Int
+        ): TimelineSummary {
+            fun isHit(hour: Int): Boolean =
+                if (hour < currentHour) stepsForHour(hour) >= goal
+                else !isSyncing && currentHourSteps >= goal
+
+            val states = timelineCircleHours(currentHour).map { hour ->
+                when {
+                    hour < currentHour -> if (isHit(hour)) "🟢" else "❌"
+                    isSyncing -> "⏳"
+                    isHit(hour) -> "🟢"
+                    else -> "🟡"
+                }
+            }
+            // The hits summary covers the whole active window so far, not just the
+            // hours that fit in the timeline.
+            val counted = countedTimelineHours(currentHour)
+            return TimelineSummary(
+                states = states,
+                achievedHours = counted.count { isHit(it) },
+                elapsedHours = counted.count()
+            )
+        }
+
         /**
          * Staleness threshold for checkpoint-driven notification updates.
          * When the last sensor event is older than this, the checkpoint loop
@@ -1100,50 +1151,24 @@ class StepCounterForegroundService : android.app.Service() {
             set(java.util.Calendar.MILLISECOND, 0)
         }
         val stepsByTimestamp = dayHistory.associate { it.timestamp to it.stepCount }
-        fun hourTimestamp(hour: Int): Long =
-            (startOfDayCalendar.clone() as java.util.Calendar).apply {
-                set(java.util.Calendar.HOUR_OF_DAY, hour)
-            }.timeInMillis
-        fun isHit(hour: Int): Boolean = when {
-            hour < currentHour -> (stepsByTimestamp[hourTimestamp(hour)] ?: 0) >= goal
-            hour == currentHour -> !isSyncing && currentHourSteps >= goal
-            else -> false
-        }
-
-        // Sliding window: show up to MAX_TIMELINE_CIRCLES, ending at current hour + 1.
-        // Lookahead (+1) only applies while there are still hours left inside the window.
-        // Once we reach or pass ACTIVE_WINDOW_END_HOUR the active window is over —
-        // show only completed past hours, no current/future circles.
-        val windowEnd = when {
-            currentHour < ACTIVE_WINDOW_START_HOUR -> ACTIVE_WINDOW_START_HOUR - 1  // empty range → no circles
-            currentHour >= ACTIVE_WINDOW_END_HOUR -> ACTIVE_WINDOW_END_HOUR - 1     // window closed — show up to last active hour
-            else -> minOf(currentHour + 1, ACTIVE_WINDOW_END_HOUR - 1)
-        }
-        val windowStart = maxOf(windowEnd - MAX_TIMELINE_CIRCLES + 1, ACTIVE_WINDOW_START_HOUR)
-
-        val states = (windowStart..windowEnd).map { hour ->
-            when {
-                hour < currentHour -> if (isHit(hour)) "🟢" else "❌"
-                hour == currentHour -> when {
-                    isSyncing -> "⏳"
-                    isHit(hour) -> "🟢"
-                    else -> "🟡"
-                }
-                else -> "⚪"
+        val summary = buildTimelineSummary(
+            currentHour = currentHour,
+            goal = goal,
+            currentHourSteps = currentHourSteps,
+            isSyncing = isSyncing,
+            stepsForHour = { hour ->
+                val hourTimestamp = (startOfDayCalendar.clone() as java.util.Calendar).apply {
+                    set(java.util.Calendar.HOUR_OF_DAY, hour)
+                }.timeInMillis
+                stepsByTimestamp[hourTimestamp] ?: 0
             }
-        }
-
-        // The hits summary covers the whole active window so far, not just the
-        // hours that fit in the timeline.
-        val countedHours = ACTIVE_WINDOW_START_HOUR..minOf(currentHour, ACTIVE_WINDOW_END_HOUR - 1)
-        val achievedHours = countedHours.count { isHit(it) }
-        val elapsedHours = countedHours.count()
+        )
 
         return TimelinePresentation(
-            statesExpanded = states.joinToString(" "),
-            statesCompact = states.joinToString(""),
-            achievedHours = achievedHours,
-            elapsedHours = elapsedHours
+            statesExpanded = summary.states.joinToString(" "),
+            statesCompact = summary.states.joinToString(""),
+            achievedHours = summary.achievedHours,
+            elapsedHours = summary.elapsedHours
         )
     }
 
