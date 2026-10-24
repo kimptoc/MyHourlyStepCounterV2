@@ -779,11 +779,16 @@ class StepCounterForegroundService : android.app.Service() {
             val probeStart = System.currentTimeMillis()
             sensorManager.flushSensor()
             val fresh = sensorManager.waitForSensorEventAfter(probeStart, STARTUP_SYNC_TIMEOUT_MS)
-            notificationSyncing.value = !fresh
+            // Only ever clear here: the sensorState observer below may already have
+            // cleared syncing on a fresh callback, and a timeout must not undo that.
             if (fresh) {
+                notificationSyncing.value = false
                 android.util.Log.i("StepCounterFGSvc", "Startup sync probe succeeded for notification")
             } else {
-                android.util.Log.w("StepCounterFGSvc", "Startup sync probe timed out; notification stays in syncing state")
+                android.util.Log.w(
+                    "StepCounterFGSvc",
+                    "Startup sync probe timed out; syncing=${notificationSyncing.value}"
+                )
             }
         }
 
